@@ -19,12 +19,13 @@ index.html
   → style.css
   → main.ts
        → applyNativeClass / safeArea
-       → createRenderer(#stage)
-       → demo scene
+       → createRenderer(#stage)   # 可选背景；canvas 不抢指针
        → mountDevicePreview → computeStageLayout → applyStageTransform
        → watchStageLayout
-       → haptics + HUD buttons
+       → createGame + mountGameView(#stage, #ui-root)
 ```
+
+玩法规则见 [GAME_RULES.md](./GAME_RULES.md) v0.6。
 
 ## 3. DOM
 

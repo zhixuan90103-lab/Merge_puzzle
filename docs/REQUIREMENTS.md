@@ -1,10 +1,13 @@
-# 需求整理（当前共识）
+# 需求整理（历史）
 
-配套：[GAME_RULES.md](./GAME_RULES.md) · [CORE_CONCEPTS.md](./CORE_CONCEPTS.md) · [TECH_RESEARCH_PLAN.md](./TECH_RESEARCH_PLAN.md)
+> **过时。** 现行玩法真源：[GAME_RULES.md](./GAME_RULES.md) **v0.6**。  
+> 下文保留 0.3 期讨论，仅供回溯。
+
+配套（现行）：[GAME_RULES.md](./GAME_RULES.md) · [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) · [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md)
 
 | 元数据 | 内容 |
 |--------|------|
-| 版本 | 0.3 |
+| 版本 | 0.3（归档） |
 | 日期语境 | L1 循环已可玩；合并推挤动画 **不丝滑**，需按本文重做表现层 |
 | 原则 | 先定需求真源，再定技术检索与改造，不边猜边堆 |
 

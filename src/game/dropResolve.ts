@@ -366,6 +366,7 @@ export function findMergeShape(
   if (newValue > 64) return null;
 
   const side = classifySide(F, B, enterDx, enterDy);
+  // All free rectangles with area = 2V (player placement chooses among them)
   const shapes: { w: number; h: number }[] = [];
   const sk = new Set<string>();
   for (const o of ['h', 'v'] as Orientation[]) {
@@ -378,6 +379,50 @@ export function findMergeShape(
   }
 
   const cands: MergeShapePick[] = [];
+
+  // Strong boost: solid union of ghost A@G with B (摆放即外形)
+  {
+    const ghostA = { ...A, x: G.x, y: G.y };
+    const minx = Math.min(ghostA.x, B.x);
+    const miny = Math.min(ghostA.y, B.y);
+    const maxx = Math.max(ghostA.x + ghostA.w - 1, B.x + B.w - 1);
+    const maxy = Math.max(ghostA.y + ghostA.h - 1, B.y + B.h - 1);
+    const uw = maxx - minx + 1;
+    const uh = maxy - miny + 1;
+    if (uw * uh === newValue && uw <= GRID_SIZE && uh <= GRID_SIZE) {
+      const cellSet = new Set<string>();
+      for (const c of cellsOfRect(ghostA.x, ghostA.y, ghostA.w, ghostA.h)) {
+        cellSet.add(`${c.x},${c.y}`);
+      }
+      for (const c of cellsOfRect(B.x, B.y, B.w, B.h)) {
+        cellSet.add(`${c.x},${c.y}`);
+      }
+      if (cellSet.size === newValue) {
+        const T = { x: minx, y: miny, w: uw, h: uh };
+        if (canFitMergeTarget(board, B, G, T)) {
+          const exp = expandDirs(B, T);
+          const bilateral = exp.bilateralH || exp.bilateralV;
+          let dirX = 0;
+          let dirY = 0;
+          if (!bilateral) {
+            if (exp.right > 0) dirX = 1;
+            else if (exp.left > 0) dirX = -1;
+            if (exp.down > 0) dirY = 1;
+            else if (exp.up > 0) dirY = -1;
+            if (exp.left + exp.right >= exp.up + exp.down) dirY = 0;
+            else dirX = 0;
+          }
+          cands.push({
+            T,
+            score: 800 + side.confidence * 50,
+            bilateral,
+            dirX,
+            dirY,
+          });
+        }
+      }
+    }
+  }
 
   for (const { w, h } of shapes) {
     for (let y = 0; y <= GRID_SIZE - h; y++) {

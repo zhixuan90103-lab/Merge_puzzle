@@ -947,7 +947,8 @@ export function tryMerge(
     return false;
   };
 
-  // 1) Solid union — only if not fighting approach (unless no room the other way)
+  // 1) Solid union of player placement (A∪B) — highest priority.
+  // Two 竖2 stacked → 1×4；two 8 side-by-side → long 16, etc.
   for (const union of unions) {
     if (
       union.w * union.h === newValue &&
@@ -957,7 +958,7 @@ export function tryMerge(
     ) {
       cands.push({
         ...union,
-        score: 4_000 + approachAlignScore(union),
+        score: 500_000 + approachAlignScore(union),
       });
     }
   }

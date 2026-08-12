@@ -1,20 +1,22 @@
 # Merge Puzzle
 
-竖屏 **占位合成** 原型：TypeScript + Three.js WebGPU + Vite + Capacitor iOS。
+竖屏 **色阵营合成推挤** 原型：TypeScript + Three.js WebGPU + Vite + Capacitor iOS。
+
+## 一句话玩法
+
+**同色合成 → 把杂色推出盘 → 单色合满屏 64 → 下一关。**
 
 ## 文档
 
 | 文档 | 用途 |
 |------|------|
 | [AGENTS.md](./AGENTS.md) | 仓库第一入口 |
-| [docs/GAME_RULES.md](./docs/GAME_RULES.md) | **规则真源 v0.4** |
-| [docs/ARCHITECTURE_GAME.md](./docs/ARCHITECTURE_GAME.md) | **玩法架构与数据流** |
-| [docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md) | **变更汇总 v0.4** |
-| [docs/research/intent/FINDINGS.md](./docs/research/intent/FINDINGS.md) | 拖合一体规格 |
-| [docs/research/INTENT_RECOGNITION_PLAN.md](./docs/research/INTENT_RECOGNITION_PLAN.md) | 检索计划 |
-| [docs/CORE_CONCEPTS.md](./docs/CORE_CONCEPTS.md) | L2 概念 |
+| [docs/GAME_RULES.md](./docs/GAME_RULES.md) | **规则真源 v0.6** |
+| [docs/ARCHITECTURE_GAME.md](./docs/ARCHITECTURE_GAME.md) | 玩法架构 |
+| [docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md) | 变更汇总 |
 | [docs/ENGINEERING.md](./docs/ENGINEERING.md) | 工程约定 |
 | [docs/ENTRYPOINTS.md](./docs/ENTRYPOINTS.md) | 启动链 |
+| [docs/research/](./docs/research/) | 历史调研（非现行真源） |
 
 ## 上手
 
@@ -24,13 +26,17 @@ npm run dev
 # → http://127.0.0.1:5200/
 ```
 
-## 玩法摘要（v0.4）
+## 玩法摘要（v0.6）
 
-- **投影 G**：空=放 · 同数重叠≥1=合 · 不同=禁止 · **原位=放回**  
-- **跟手 F**：连续偏置 = 生长意图；紫虚线 = 合后形 T*（可双侧空槽）  
-- 推：比合成后 **2V**，盘内可推；动画连续；结算裁切半出盘  
-- 开局底边整齐；出块中后期少 1、多 2/4  
-- **64** → 清空重摆  
+| | |
+|--|--|
+| 合 | 同色同数；朝向相容；重叠≥1；**合后形跟摆放走** |
+| 推 | 合后体积 2V 推 **更小** 块（含异色）；同体积不可推 |
+| 流放 | 推光某色 → 本波不再出该色 |
+| 过关 | 单色 **64** 满盘 → 清盘下一关（色种随关增加，最多 5） |
+| 失败 | 不能搬且不能合 |
+
+拖：投影=落点 · 跟手=生长意图 · 紫虚线=合后形。
 
 ## iOS
 
