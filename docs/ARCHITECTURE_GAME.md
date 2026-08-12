@@ -17,14 +17,15 @@
 | 文件 | 职责 |
 |------|------|
 | `types.ts` | `Piece`（含 **color**）/ `BoardState` / `MAX_COLORS` |
-| `progress.ts` | 关卡色种表、出块色权重、**盘上活跃色** |
+| `progress.ts` | 关卡色种表、出块色权重、**盘上活跃色**、`waveIntroMessage` |
 | `board.ts` | 占用、克隆、**clip 保色** |
 | `shapes.ts` | `canMergePair`、**allRectsForValue** / sizeCandidates、填色 |
-| `deal.ts` | 开局 / 过关重摆 / Debug（按 wave + 色种） |
+| `deal.ts` | 开局 / 过关重摆 / Debug（**前 5 关手摆剧本**，6+ 模板） |
 | `dropResolve.ts` | G / F / T*；摆放并进 solid 合后形 |
 | `merge.ts` | tryMerge、推链、生长；优先 A∪B |
 | `plan.ts` · `timeline.ts` | 步进计划与连续动画 |
-| `spawn.ts` | 合后出块：只刷盘上色、配对、防秒死 |
+| `fill.ts` | **闭包补满**：推出后 pack 至 64；配对/合后色；防补死 |
+| `spawn.ts` | 遗留单点放置工具；合后入口 re-export `fill` |
 | `deadlock.ts` | isPlayable / isDeadlock / hasSustainablePlay |
 | `move.ts` | 搬家 |
 | `game.ts` | 状态机、wave、unlockedColors、afterMerge |
@@ -36,15 +37,15 @@
 
 ```
 pointerdown  → hitTest → beginLift
-pointermove  → proposeDrop → 绿/蓝/红 + T*
+pointermove  → proposeDrop → 蓝可合 / 灰原位 / 红非法 + T*
 pointerup    → dropAt(最后一帧提案)
-               ├─ place
                ├─ merge → tryMerge(forcedTarget)
                │          → playMergePlan
                │          → afterMerge
-               │             ├─ 64 → dealAfterClear(下一关)
-               │             └─ trySpawnAfterMerge（盘上色）
+               │             ├─ 64 → dealAfterClear(下一关·满盘)
+               │             └─ area<64 → fillToFull（补满·盘上色·防死）
                └─ illegal / 原位 → 弹回 / 放回
+（无 place；稳定态永远满 64 格）
 ```
 
 ---

@@ -1,6 +1,23 @@
-import { allocId, emptyBoard, upsertPiece } from './board';
+import { allocId, boardArea, emptyBoard, upsertPiece } from './board';
 import type { BoardState } from './types';
-import { MAX_COLORS } from './types';
+import { GRID_SIZE, MAX_COLORS } from './types';
+
+/**
+ * 关卡哲学（开局手摆谜题，不是随机铺砖）
+ *
+ * 参考推箱子 / GMT 谜题设计：
+ * - **先定解再摆盘**（solution-first），不是铺满再找感觉
+ * - **一关一课**（one lesson）：只强调一个新约束
+ * - **假解可见**（false path）：错 A/B 或错方向仍可合，但清不净
+ * - **限制即谜题**：同体积不推、谁当锚点、生长轴向
+ *
+ * 玩家每关要想：
+ * 1) 拿起哪一块（A）放到哪一块（B）上
+ * 2) 往哪边长（= 推挤方向）
+ * 3) 这一手是否既合成又推异色
+ *
+ * 好关：关键一手可发现；错线有反馈。差关：到处能合 / 无读盘。
+ */
 
 function add(
   board: BoardState,
@@ -11,6 +28,9 @@ function add(
   h: number,
   color: number,
 ): void {
+  if (w * h !== value) {
+    throw new Error(`deal add: value ${value} != ${w}×${h}`);
+  }
   upsertPiece(board, {
     id: allocId(board),
     value,
@@ -26,77 +46,261 @@ function clampUnlocked(n: number): number {
   return Math.max(1, Math.min(MAX_COLORS, Math.floor(n)));
 }
 
+function assertFull(board: BoardState, label: string): void {
+  const a = boardArea(board);
+  if (a !== GRID_SIZE * GRID_SIZE) {
+    throw new Error(`${label}: board area ${a} !== 64`);
+  }
+}
+
 /**
- * Opening / post-clear deal.
- * @param unlockedColors palette size 1..5（由 wave 表决定，见 progress.ts）
- * @param wave 关卡：1 教学 · 2–3 双色 · 4+ 三色起
- *
- * Wave 1: 主色大块 + **仅一枚** 副色 4（推开才能满屏）
- * Wave 2–3: 双色常规局（出块频率在 spawn 侧区分）
- * Wave 4+: 按 unlocked 多色开局
+ * Full-board puzzle openings (Σ value = 64).
  */
 export function dealOpening(unlockedColors = 2, wave = 1): BoardState {
   const u = clampUnlocked(unlockedColors);
+  const w = Math.max(1, Math.floor(wave));
   const board = emptyBoard();
 
-  // ——— 第 1 关：双色教学（主色冲 64；副色只有一枚 4）———
-  if (wave === 1) {
-    // 主色 0：一枚 16 + 一对 8 + 两对 4
-    add(board, 16, 0, 4, 4, 4, 0);
-    add(board, 8, 4, 6, 4, 2, 0);
-    add(board, 8, 4, 4, 4, 2, 0);
-    add(board, 4, 0, 2, 2, 2, 0);
-    add(board, 4, 2, 2, 2, 2, 0);
+  // ═══════════════════════════════════════════════════════════
+  // 1 推门 · 关键一手：双 16 合向右，一箭双雕
+  // ───────────────────────────────────────────────────────────
+  // 意图：左上/左下两枚 16，拿任意一枚叠到另一枚上 **向右生长** → 成 32，
+  //       同时把右上异色 4 推下盘。也可先合右侧小料，但「双 16 右推」是主解。
+  // 读盘点：谁当锚点 B、往哪边长；往左/上合不出清场。
+  // ═══════════════════════════════════════════════════════════
+  if (w === 1) {
+    add(board, 16, 0, 0, 4, 4, 0); // 左上 16
+    add(board, 16, 0, 4, 4, 4, 0); // 左下 16
+    add(board, 4, 4, 0, 2, 2, 0);
+    add(board, 4, 6, 0, 2, 2, 1); // 异色门
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 4, 6, 2, 2, 2, 0);
+    add(board, 8, 4, 4, 4, 2, 0); // 右中 8 横
+    add(board, 8, 4, 6, 4, 2, 0); // 右下 8 横
+    assertFull(board, 'wave1');
+    return board;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 2 流放 · 关键一手：先造第二枚 16，再用 **初始 16 去合、向上长**
+  // ───────────────────────────────────────────────────────────
+  // 盘面：左侧一枚「原始 16」；右下两枚 8 可合出第二枚 16；
+  //       异色 2 分居顶带与右侧，一次好推可清两处。
+  // 精妙点：
+  //   - 若拿 **新 16** 去合旧 16 且方向不对 → 推不全异色
+  //   - 若拿 **初始 16** 叠到新 16 上 **向上生长** → 推挤路径更干净
+  // 读盘点：A/B 谁主动、生长轴向 = 谜题本身
+  // ═══════════════════════════════════════════════════════════
+  if (w === 2) {
+    // 顶带
     add(board, 4, 0, 0, 2, 2, 0);
     add(board, 4, 2, 0, 2, 2, 0);
-    // 副色 1：唯一一块 4，挡在右上生长带 — 不合主色，满屏前须推走
-    add(board, 4, 6, 0, 2, 2, 1);
+    add(board, 2, 4, 0, 2, 1, 1); // 顶边异色 2
+    add(board, 2, 6, 0, 2, 1, 0);
+    add(board, 2, 4, 1, 2, 1, 0);
+    add(board, 2, 6, 1, 2, 1, 0);
+    // 中：原始 16 + 右侧碎料 + 侧异色
+    add(board, 16, 0, 2, 4, 4, 0); // ★ 初始 16（关键棋子）
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 2, 6, 2, 1, 2, 0);
+    add(board, 2, 7, 2, 1, 2, 1); // 右边异色 2
+    // 中下 8
+    add(board, 8, 4, 4, 4, 2, 0);
+    // 底：两枚 8 —— 合出第二枚 16 的原料
+    add(board, 8, 0, 6, 4, 2, 0);
+    add(board, 8, 4, 6, 4, 2, 0);
+    assertFull(board, 'wave2');
     return board;
   }
 
-  if (u <= 2) {
-    // ——— 2 色常规波：双方都有可合对 ———
+  // ═══════════════════════════════════════════════════════════
+  // 3 铁门 · 对齐第2关结构：两步 + 关键棋 + 同体积课
+  // ───────────────────────────────────────────────────────────
+  // 结构（与「一眼双 8 右推」不同）：
+  //   顶左 诱饵 8（像能直接办事）
+  //   中左 ★关键 8（身份棋，类似第2关的初始 16）
+  //   中右 异色竖门 8（必须 16 才能推）
+  //   关键 4 下 两枚 4 = 第二枚 8 的原料
+  //   其余 4 填满 / 假忙
+  //
+  // 主解（两步，有顺序）：
+  //   ① 合关键 8 **正下方**那对 4 → 得到伙伴 8（先造刀柄）
+  //   ② 拿 ★关键 8 叠到新 8 上（或反向但须）**向右长** → 16 推门
+  // 假解：
+  //   A. 关键 8 / 诱饵 8 直接撞门 → 同体积推不动（铁门课）
+  //   B. 关键 8 先和顶左诱饵 8 向上合 → 合出 16 但在左边，门还在
+  //   C. 造出伙伴后往左/下长 → 有 16 无推门
+  //   D. 先满盘合其它 4 → 拖节奏
+  // ═══════════════════════════════════════════════════════════
+  if (w === 3) {
+    add(board, 8, 0, 0, 4, 2, 0); // 顶左诱饵 8
+    add(board, 8, 0, 2, 4, 2, 0); // ★ 关键 8（中左）
+    add(board, 8, 6, 2, 2, 4, 1); // ★ 异色竖门（中右，对齐关键 8 高度）
+    // 关键正下：第二枚 8 的原料（必须先合这里）
+    add(board, 4, 0, 4, 2, 2, 0);
+    add(board, 4, 2, 4, 2, 2, 0);
+    // 填缝 / 假忙 4
+    add(board, 4, 4, 0, 2, 2, 0);
+    add(board, 4, 6, 0, 2, 2, 0);
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 4, 4, 4, 2, 2, 0);
+    add(board, 4, 4, 6, 2, 2, 0);
+    add(board, 4, 6, 6, 2, 2, 0);
     add(board, 4, 0, 6, 2, 2, 0);
     add(board, 4, 2, 6, 2, 2, 0);
-    add(board, 4, 4, 6, 2, 2, 1);
-    add(board, 4, 6, 6, 2, 2, 1);
-    add(board, 2, 0, 4, 2, 1, 0);
-    add(board, 2, 2, 4, 2, 1, 0);
-    add(board, 2, 4, 4, 2, 1, 1);
-    add(board, 2, 6, 4, 2, 1, 1);
-    add(board, 2, 0, 2, 1, 2, 0);
-    add(board, 2, 1, 2, 1, 2, 0);
-    add(board, 2, 6, 2, 1, 2, 1);
-    add(board, 2, 7, 2, 1, 2, 1);
+    assertFull(board, 'wave3');
     return board;
   }
 
-  // ——— 3+ 色：更碎，多色对 ———
-  const c0 = 0;
-  const c1 = 1;
-  const c2 = u >= 3 ? 2 : 0;
-  const c3 = u >= 4 ? 3 : 1;
-  const c4 = u >= 5 ? 4 : 0;
-
-  add(board, 4, 0, 6, 2, 2, c0);
-  add(board, 4, 2, 6, 2, 2, c0);
-  add(board, 2, 4, 7, 2, 1, c1);
-  add(board, 2, 6, 7, 2, 1, c1);
-  add(board, 2, 4, 5, 1, 2, c2);
-  add(board, 2, 5, 5, 1, 2, c2);
-  add(board, 1, 6, 5, 1, 1, c3);
-  add(board, 1, 7, 5, 1, 1, c3);
-  add(board, 2, 0, 4, 2, 1, c4);
-  add(board, 2, 2, 4, 2, 1, c4);
-  if (u >= 3) {
-    add(board, 1, 6, 4, 1, 1, c2);
-    add(board, 1, 7, 4, 1, 1, c2);
+  // ═══════════════════════════════════════════════════════════
+  // 4 借刀 · 像第2关：先造第二枚 16，再决「谁叠谁、往哪长」
+  // ───────────────────────────────────────────────────────────
+  // 结构：
+  //   ★ 初始 16 在中左（关键棋，类似第2关）
+  //   顶右 异色 8 铁门（必须 16 级才能推）
+  //   底  双 8 = 第二枚 16 的原料
+  //   顶左 诱饵 8 贴门（同体积撞门必败）
+  //   中右 4 填缝
+  //
+  // 主解（两步，有解密感）：
+  //   ① 底双 8 合成第二枚 16（先不要急着碰门）
+  //   ② 拿 **初始 16** 叠到新 16 上（或反过来但必须）**向上/右上长**
+  //      → 32 扫门；A/B 或方向错则 32 长到别处，门仍在
+  // 假解：
+  //   - 顶左 8 撞门
+  //   - 造出第二 16 后，用新 16 去合初始 16 却向左/下长（合大了但门不掉）
+  //   - 先拿初始 16 和 4 瞎忙
+  // ═══════════════════════════════════════════════════════════
+  if (w === 4) {
+    add(board, 8, 4, 0, 4, 2, 1); // ★ 异色门（8，需 ≥16 推）
+    add(board, 8, 0, 0, 4, 2, 0); // 顶左诱饵 8
+    add(board, 16, 0, 2, 4, 4, 0); // ★ 初始 16（关键棋）
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 4, 6, 2, 2, 2, 0);
+    add(board, 4, 4, 4, 2, 2, 0);
+    add(board, 4, 6, 4, 2, 2, 0);
+    add(board, 8, 0, 6, 4, 2, 0); // ★ 原料 8
+    add(board, 8, 4, 6, 4, 2, 0); // ★ 原料 8 → 第二 16
+    assertFull(board, 'wave4');
+    return board;
   }
 
-  return board;
+  // ═══════════════════════════════════════════════════════════
+  // 5 剪枝 · 三色（轻量可验证）
+  // 主色 40 + 黄 16 + 第三色 8 = 64
+  // 主解：左下双4→8，双8向右合16，先挤第三色2并压黄；再清黄。
+  // ═══════════════════════════════════════════════════════════
+  if (w === 5) {
+    // 主色 40
+    add(board, 16, 0, 0, 4, 4, 0);
+    add(board, 8, 0, 4, 4, 2, 0);
+    add(board, 4, 0, 6, 2, 2, 0);
+    add(board, 4, 2, 6, 2, 2, 0);
+    add(board, 4, 4, 4, 2, 2, 0);
+    add(board, 4, 4, 6, 2, 2, 0);
+    // 黄 16：顶右 8 + 中 4+4
+    add(board, 8, 4, 0, 4, 2, 1);
+    add(board, 4, 6, 2, 2, 2, 1);
+    add(board, 4, 6, 4, 2, 2, 1);
+    // 第三色 8：右中竖条 2×4 用四个 2？或 一枚 4 + 双 2
+    add(board, 4, 4, 2, 2, 2, 2); // ★ 第三色 4（可被 8/16 推）
+    add(board, 2, 6, 6, 2, 1, 2);
+    add(board, 2, 6, 7, 2, 1, 2);
+    assertFull(board, 'wave5');
+    return board;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 6 两翼 · 三色：左黄窝 + 右第3色窝，先清更碎的一侧
+  // 主色40 + 色1 12 + 色2 12 = 64
+  // ═══════════════════════════════════════════════════════════
+  if (w === 6) {
+    // 主色 48 + 色1 8 + 色2 8 = 64
+    add(board, 16, 0, 2, 4, 4, 0);
+    add(board, 8, 0, 6, 4, 2, 0);
+    add(board, 8, 4, 6, 4, 2, 0);
+    add(board, 8, 0, 0, 4, 2, 0);
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 4, 4, 4, 2, 2, 0);
+    // 色1 顶右偏中
+    add(board, 4, 4, 0, 2, 2, 1);
+    add(board, 4, 6, 0, 2, 2, 1);
+    // 色2 右中（边缘，宜先清）
+    add(board, 4, 6, 2, 2, 2, 2);
+    add(board, 4, 6, 4, 2, 2, 2);
+    assertFull(board, 'wave6');
+    return board;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 7 无锚铁门 · 左双 8→16 右推异色 8
+  // ═══════════════════════════════════════════════════════════
+  if (w === 7) {
+    add(board, 8, 4, 0, 4, 2, 1); // 门
+    add(board, 8, 0, 0, 4, 2, 0);
+    add(board, 8, 0, 2, 4, 2, 0);
+    add(board, 4, 4, 2, 2, 2, 0);
+    add(board, 4, 6, 2, 2, 2, 0);
+    add(board, 4, 0, 4, 2, 2, 0);
+    add(board, 4, 2, 4, 2, 2, 0);
+    add(board, 4, 4, 4, 2, 2, 0);
+    add(board, 4, 6, 4, 2, 2, 0);
+    add(board, 8, 0, 6, 4, 2, 0);
+    add(board, 8, 4, 6, 4, 2, 0);
+    assertFull(board, 'wave7');
+    return board;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 8 四色 · 碎敌剪枝
+  // ═══════════════════════════════════════════════════════════
+  if (w === 8) {
+    add(board, 16, 0, 2, 4, 4, 0);
+    add(board, 8, 0, 6, 4, 2, 0);
+    add(board, 8, 4, 6, 4, 2, 0);
+    add(board, 4, 0, 0, 2, 2, 1);
+    add(board, 4, 2, 0, 2, 2, 0);
+    add(board, 2, 4, 0, 2, 1, 2);
+    add(board, 2, 6, 0, 2, 1, 3);
+    add(board, 2, 4, 1, 2, 1, 2);
+    add(board, 2, 6, 1, 2, 1, 1);
+    add(board, 4, 4, 2, 2, 2, 1);
+    add(board, 4, 6, 2, 2, 2, 3);
+    add(board, 4, 4, 4, 2, 2, 2);
+    add(board, 4, 6, 4, 2, 2, 0);
+    assertFull(board, 'wave8');
+    return board;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 9+ 五色压力
+  // ═══════════════════════════════════════════════════════════
+  {
+    const c3 = u >= 4 ? 3 : 1;
+    const c4 = u >= 5 ? 4 : 2;
+    add(board, 16, 2, 2, 4, 4, 0);
+    add(board, 4, 0, 0, 2, 2, 1);
+    add(board, 4, 2, 0, 2, 2, 0);
+    add(board, 4, 4, 0, 2, 2, 2);
+    add(board, 4, 6, 0, 2, 2, c3);
+    add(board, 2, 0, 2, 1, 2, 1);
+    add(board, 2, 1, 2, 1, 2, 2);
+    add(board, 2, 0, 4, 2, 1, 0);
+    add(board, 2, 0, 5, 2, 1, c4);
+    add(board, 4, 0, 6, 2, 2, 2);
+    add(board, 4, 2, 6, 2, 2, 1);
+    add(board, 2, 6, 2, 2, 1, 0);
+    add(board, 2, 6, 3, 2, 1, c3);
+    add(board, 2, 6, 4, 1, 2, 2);
+    add(board, 2, 7, 4, 1, 2, c4);
+    add(board, 4, 4, 6, 2, 2, 0);
+    add(board, 4, 6, 6, 2, 2, 1);
+    assertFull(board, `wave${w}`);
+    return board;
+  }
 }
 
-/** Dense board to reach 64 faster (debug). */
+/** Debug near-64：仍满盘，主色大块 + 少量杂色。 */
 export function dealDebugNear64(unlockedColors = 2): BoardState {
   const u = clampUnlocked(unlockedColors);
   const board = emptyBoard();
@@ -106,17 +310,13 @@ export function dealDebugNear64(unlockedColors = 2): BoardState {
   add(board, 8, 0, 4, 4, 2, c);
   add(board, 8, 4, 4, 4, 2, c);
   add(board, 4, 0, 6, 2, 2, u >= 2 ? 1 : c);
-  add(board, 4, 2, 6, 2, 2, u >= 2 ? 1 : c);
-  add(board, 2, 4, 6, 2, 1, u >= 3 ? 2 : c);
-  add(board, 2, 4, 7, 2, 1, u >= 3 ? 2 : c);
-  add(board, 1, 6, 6, 1, 1, c);
-  add(board, 1, 7, 6, 1, 1, c);
-  add(board, 1, 6, 7, 1, 1, c);
-  add(board, 1, 7, 7, 1, 1, c);
+  add(board, 4, 2, 6, 2, 2, c);
+  add(board, 4, 4, 6, 2, 2, u >= 3 ? 2 : c);
+  add(board, 4, 6, 6, 2, 2, c);
+  assertFull(board, 'debug');
   return board;
 }
 
-/** Post-64 full clear: re-deal for next wave. */
 export function dealAfterClear(unlockedColors: number, wave: number): BoardState {
   return dealOpening(unlockedColors, wave);
 }

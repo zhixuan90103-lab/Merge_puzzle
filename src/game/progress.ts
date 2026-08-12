@@ -1,22 +1,47 @@
 import { MAX_COLORS } from './types';
 
 /**
- * Color unlock by wave (not +1 every clear):
- * 1–3: 2 色 · 4–5: 3 色 · 6–7: 4 色 · 8+: 5 色
+ * Color unlock by wave（5 关教学阶梯后再加色）:
+ * 1–4: 2 色 · 5–6: 3 色 · 7–8: 4 色 · 9+: 5 色
  */
 export function unlockedColorsForWave(wave: number): number {
   const w = Math.max(1, Math.floor(wave));
-  if (w <= 3) return 2;
-  if (w <= 5) return 3;
-  if (w <= 7) return 4;
+  if (w <= 4) return 2;
+  if (w <= 6) return 3;
+  if (w <= 8) return 4;
   return MAX_COLORS;
 }
 
 /**
- * Relative spawn weights per color index (0 = primary).
- * - 第2关：副色很低
- * - 第3关：副色升高
- * - 第4关起：最新解锁色偏低
+ * 开局课题：想清「拿谁合谁、往哪边长」——既合成又推异色。
+ */
+export function waveIntroMessage(wave: number): string {
+  const w = Math.max(1, Math.floor(wave));
+  switch (w) {
+    case 1:
+      return '第1关·推门：想清拿哪枚 16 合哪枚、往哪边长——右推可顺带清异色 4';
+    case 2:
+      return '第2关·流放：先造第二枚 16；谁当主动、往哪长，决定异色清不干净';
+    case 3:
+      return '第3关·铁门：先造伙伴 8，再用中间那枚关键 8 向右合出 16 推门——8 撞门推不动';
+    case 4:
+      return '第4关·借刀：先造第二枚 16，再想清谁叠谁、往哪长才能扫掉顶上门';
+    case 5:
+      return '第5关·剪枝：先挤掉第 3 色小块，再打黄；别先把黄养成铁门';
+    case 6:
+      return '第6关·两翼：左右异色窝，先清更碎的一侧';
+    case 7:
+      return '第7关·无锚铁门：自己合出 16 才能推异色 8';
+    case 8:
+      return '第8关·四色碎敌：每次剪最挡路的弱色';
+    default:
+      return `第 ${w} 关 · ${unlockedColorsForWave(w)} 色 · 剪枝顺序与合推方向决定难度`;
+  }
+}
+
+/**
+ * Relative spawn weights per color index (0 = primary palette slot).
+ * 1 推门极少副色 · 2 流放低 · 3 铁门低 · 4 选边均衡 · 5+ 新色偏低
  */
 export function colorSpawnWeights(wave: number, unlockedColors: number): number[] {
   const u = Math.max(1, Math.min(MAX_COLORS, Math.floor(unlockedColors)));
@@ -25,20 +50,21 @@ export function colorSpawnWeights(wave: number, unlockedColors: number): number[
   if (u === 1) return [1];
 
   if (u === 2) {
-    if (w <= 1) return [0.9, 0.1]; // 第1关：副色极少出（盘上已有教学块）
-    if (w === 2) return [0.88, 0.12]; // 第2关：副色远低于主色
-    return [0.6, 0.4]; // 第3关：副色频率上来
+    if (w <= 1) return [0.95, 0.05]; // 推门：几乎不补副色
+    if (w === 2) return [0.9, 0.1]; // 流放：副色很少，推光体感清晰
+    if (w === 3) return [0.88, 0.12]; // 铁门：专注合大推门
+    if (w === 4) return [0.5, 0.5]; // 选边：均衡回流
+    return [0.55, 0.45];
   }
 
   if (u === 3) {
-    // 第4–5关：第3色是新色，权重低
-    if (w <= 4) return [0.55, 0.32, 0.13];
-    return [0.45, 0.33, 0.22];
+    // 第5–6关：第3色新，权重低
+    if (w <= 5) return [0.48, 0.37, 0.15];
+    return [0.42, 0.33, 0.25];
   }
 
   if (u === 4) {
-    // 最新色最低
-    if (w <= 6) return [0.42, 0.28, 0.18, 0.12];
+    if (w <= 7) return [0.4, 0.28, 0.2, 0.12];
     return [0.35, 0.28, 0.22, 0.15];
   }
 

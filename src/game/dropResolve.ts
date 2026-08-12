@@ -5,6 +5,7 @@
  * - aim = finger - offsetY (board-local cells)
  * - F continuous; G snapped; no soft-snap by default
  * - merge: ≥1 cell overlap; orient first; T* from slot/unilateral
+ * - **No free place**: only merge or return-home (cancel). Empty cells = illegal.
  */
 import { canPlaceRect, pieceCenter } from './board';
 import { canMergePair, cellsOfRect, sizeCandidates } from './shapes';
@@ -50,7 +51,7 @@ export function mergeOverlapThreshold(_a: Piece, _b: Piece): number {
 
 /**
  * Merge only when footprints **overlap ≥ 1 cell**.
- * Edge-adjacent alone = place/move intent (user often just wants to sit next to a twin).
+ * Edge-adjacent alone is NOT merge (and free place is disabled → illegal / keep dragging).
  * Debris-between push: still works if ghost overlaps B and also covers pushables.
  */
 export function findMergeTarget(
@@ -134,7 +135,10 @@ function protrusion(a: Rect, b: Rect) {
 
 /**
  * classifySide(F, B) — intent from finger body, not board debris.
- * Uses: F center vs B, protrusion of F past B, enter motion (centered).
+ * Uses: F center vs B, protrusion of F past B, enter motion (prefer **recent** approach).
+ *
+ * enterDx/Dy should be the last segment of the drag (not full lift→drop path),
+ * so stacking on a twin still steers grow direction with a short swipe.
  */
 export function classifySide(F: Rect, B: Rect, enterDx = 0, enterDy = 0): SideClass {
   const bc = { x: B.x + B.w / 2, y: B.y + B.h / 2 };
@@ -152,10 +156,18 @@ export function classifySide(F: Rect, B: Rect, enterDx = 0, enterDy = 0): SideCl
   if (pr.down > pr.up && pr.down > 0.15) dy += pr.down * 0.85;
 
   const centerMag = Math.abs(fc.x - bc.x) + Math.abs(fc.y - bc.y);
-  // Nearly stacked on B → enter direction (from below → grow down)
-  if (centerMag < 0.35 && pr.left + pr.right + pr.up + pr.down < 0.4) {
-    dx = -enterDx;
-    dy = -enterDy;
+  const enterMag = Math.abs(enterDx) + Math.abs(enterDy);
+  // Nearly stacked on B → approach vector (from below → grow down)
+  // Blend: short final swipe dominates when present
+  if (centerMag < 0.45 && pr.left + pr.right + pr.up + pr.down < 0.55) {
+    if (enterMag > 0.06) {
+      dx = -enterDx;
+      dy = -enterDy;
+    }
+  } else if (enterMag > 0.2 && centerMag < 0.9) {
+    // Partial stack: mix geometry with recent enter
+    dx = dx * 0.45 + -enterDx * 0.55;
+    dy = dy * 0.45 + -enterDy * 0.55;
   }
 
   const adx = Math.abs(dx);
@@ -165,33 +177,33 @@ export function classifySide(F: Rect, B: Rect, enterDx = 0, enterDy = 0): SideCl
   const bilatV = pr.up > 0.35 && pr.down > 0.35;
 
   if (adx > ady + SIDE_EPS) {
-    const conf = Math.min(3, adx + Math.max(pr.left, pr.right));
+    const conf = Math.min(3, adx + Math.max(pr.left, pr.right) + enterMag * 0.35);
     return {
       axis: 'h',
       dirX: dx >= 0 ? 1 : -1,
       dirY: 0,
-      confidence: conf,
+      confidence: Math.max(0.35, conf),
       bilateralHint: bilatH && conf < 0.9,
     };
   }
   if (ady > adx + SIDE_EPS) {
-    const conf = Math.min(3, ady + Math.max(pr.up, pr.down));
+    const conf = Math.min(3, ady + Math.max(pr.up, pr.down) + enterMag * 0.35);
     return {
       axis: 'v',
       dirX: 0,
       dirY: dy >= 0 ? 1 : -1,
-      confidence: conf,
+      confidence: Math.max(0.35, conf),
       bilateralHint: bilatV && conf < 0.9,
     };
   }
   // Tie / weak: enter motion
-  if (Math.abs(enterDx) + Math.abs(enterDy) > 0.08) {
+  if (enterMag > 0.06) {
     if (Math.abs(enterDx) >= Math.abs(enterDy)) {
       return {
         axis: 'h',
         dirX: -Math.sign(enterDx) || 1,
         dirY: 0,
-        confidence: 0.55,
+        confidence: 0.65,
         bilateralHint: bilatH,
       };
     }
@@ -199,7 +211,7 @@ export function classifySide(F: Rect, B: Rect, enterDx = 0, enterDy = 0): SideCl
       axis: 'v',
       dirX: 0,
       dirY: -Math.sign(enterDy) || 1,
-      confidence: 0.55,
+      confidence: 0.65,
       bilateralHint: bilatV,
     };
   }
@@ -380,7 +392,42 @@ export function findMergeShape(
 
   const cands: MergeShapePick[] = [];
 
-  // Strong boost: solid union of ghost A@G with B (摆放即外形)
+  // Board density: full / near-full → intent must beat “only pushable” noise
+  let freeCells = 0;
+  {
+    const occ = new Set<string>();
+    for (const p of board.pieces) {
+      if (p.id === B.id) continue;
+      for (const c of cellsOfRect(p.x, p.y, p.w, p.h)) {
+        occ.add(cellKey(c.x, c.y));
+      }
+    }
+    for (const c of cellsOfRect(B.x, B.y, B.w, B.h)) occ.add(cellKey(c.x, c.y));
+    freeCells = GRID_SIZE * GRID_SIZE - occ.size;
+  }
+  const denseBoard = freeCells <= 8;
+
+  const scoreIntent = (
+    dirX: number,
+    dirY: number,
+    bilateral: boolean,
+  ): number => {
+    let s = 0;
+    if (matchesSideIntent(side, dirX, dirY, bilateral)) {
+      // Dense boards: intent is almost the only readable signal
+      s += (denseBoard ? 700 : 420) + side.confidence * 140;
+    } else if (!bilateral) {
+      if (side.dirX !== 0 && dirX === -side.dirX) s -= denseBoard ? 500 : 350;
+      if (side.dirY !== 0 && dirY === -side.dirY) s -= denseBoard ? 500 : 350;
+      if (side.confidence >= 0.4) {
+        if (side.axis === 'h' && dirY !== 0 && dirX === 0) s -= 220;
+        if (side.axis === 'v' && dirX !== 0 && dirY === 0) s -= 220;
+      }
+    }
+    return s;
+  };
+
+  // Solid union of ghost A@G with B (摆放即外形) — still respects intent
   {
     const ghostA = { ...A, x: G.x, y: G.y };
     const minx = Math.min(ghostA.x, B.x);
@@ -412,13 +459,10 @@ export function findMergeShape(
             if (exp.left + exp.right >= exp.up + exp.down) dirY = 0;
             else dirX = 0;
           }
-          cands.push({
-            T,
-            score: 800 + side.confidence * 50,
-            bilateral,
-            dirX,
-            dirY,
-          });
+          // Placement shape is strong, but must not ignore clear approach intent
+          let score = 520 + side.confidence * 40;
+          score += scoreIntent(dirX, dirY, bilateral);
+          cands.push({ T, score, bilateral, dirX, dirY });
         }
       }
     }
@@ -473,28 +517,19 @@ export function findMergeShape(
         }
         score += coverG * 15;
 
-        // Prefer fewer pushes (debris cost) — do NOT reward growing into clutter
-        score -= occ.pushable * 25;
-        score += occ.empty * 8;
+        // Prefer fewer pushes — on dense boards soften (everything is push)
+        const pushPen = denseBoard ? 8 : 25;
+        const emptyBon = denseBoard ? 3 : 8;
+        score -= occ.pushable * pushPen;
+        score += occ.empty * emptyBon;
 
         // ——— Intent is primary ———
-        if (matchesSideIntent(side, dirX, dirY, bilateral)) {
-          score += 400 + side.confidence * 120;
-        } else if (!bilateral) {
-          // Opposing one-way growth
-          if (side.dirX !== 0 && dirX === -side.dirX) score -= 350;
-          if (side.dirY !== 0 && dirY === -side.dirY) score -= 350;
-          // Wrong axis when intent is strong
-          if (side.confidence >= 0.5) {
-            if (side.axis === 'h' && dirY !== 0 && dirX === 0) score -= 200;
-            if (side.axis === 'v' && dirX !== 0 && dirY === 0) score -= 200;
-          }
-        }
+        score += scoreIntent(dirX, dirY, bilateral);
 
         // Bilateral: only big bonus for clean empty slot (U6), not debris-filled
         if (bilateral) {
           if (trueEmptySlot) score += 180;
-          else score -= 80; // "fake bilateral" through pushable trash
+          else score -= denseBoard ? 40 : 80;
           if (side.bilateralHint && trueEmptySlot) score += 60;
           if (side.confidence >= 0.7 && !side.bilateralHint) score -= 150;
         }
@@ -506,8 +541,10 @@ export function findMergeShape(
 
   if (cands.length === 0) return null;
 
-  // When intent is clear, only keep aligned shapes (unless none)
-  const strong = side.confidence >= 0.45 && !side.bilateralHint;
+  // When intent is clear, only keep aligned shapes (unless none).
+  // Dense boards: lower bar so slight approach still steers T*.
+  const confNeed = denseBoard ? 0.28 : 0.45;
+  const strong = side.confidence >= confNeed && !side.bilateralHint;
   let pool = cands;
   if (strong) {
     const aligned = cands.filter((c) =>
@@ -524,7 +561,8 @@ export function findMergeShape(
  * Continuous drop proposal — no soft-snap.
  * Board is rest-of-board (A lifted out).
  *
- * **Return home**: ghost on lift origin → place (cancel), never merge with neighbor.
+ * **Return home**: ghost on lift origin → cancel (kind `move`, not relocate).
+ * **No free place**: empty footprint is illegal — only merge onto a twin.
  */
 export function proposeDrop(
   board: BoardState,
@@ -631,24 +669,15 @@ export function proposeDrop(
     };
   }
 
-  if (canPlaceRect(board, ghost.x, ghost.y, A.w, A.h)) {
-    return {
-      kind: 'move',
-      ghost,
-      targetId: null,
-      overlapCells: 0,
-      reason: '可放置',
-      fingerRect: F,
-      mergeTarget: null,
-    };
-  }
-
+  // Free place disabled — empty cells are not a legal drop
   return {
     kind: 'illegal',
     ghost,
     targetId: null,
     overlapCells: 0,
-    reason: '无法放置',
+    reason: canPlaceRect(board, ghost.x, ghost.y, A.w, A.h)
+      ? '只能拖到同色同体积上合并'
+      : '无法放置',
     fingerRect: F,
     mergeTarget: null,
   };

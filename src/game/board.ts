@@ -126,8 +126,20 @@ export function pieceCenter(p: Piece): { x: number; y: number } {
   return { x: p.x + p.w / 2, y: p.y + p.h / 2 };
 }
 
+/** Total occupied cells (value = area). Full board ⇒ 64. */
+export function boardArea(board: BoardState): number {
+  let n = 0;
+  for (const p of board.pieces) n += p.value;
+  return n;
+}
+
 export function emptyCellCount(board: BoardState): number {
   return GRID_SIZE * GRID_SIZE - board.pieces.reduce((s, p) => s + p.w * p.h, 0);
+}
+
+/** Stable state invariant: no empty cells. */
+export function isBoardFull(board: BoardState): boolean {
+  return boardArea(board) === GRID_SIZE * GRID_SIZE;
 }
 
 /** Can place rectangle without overlap (ignore ids). */

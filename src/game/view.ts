@@ -124,6 +124,7 @@ export function mountGameView(
     <p class="panel-title" style="margin:0 0 8px;font-size:12px;opacity:.8;">操作</p>
     <div class="row" style="display:flex;flex-wrap:wrap;gap:8px;">
       <button type="button" id="btn-restart">重开</button>
+      <button type="button" id="btn-next-wave">下一关</button>
       <button type="button" id="btn-debug">Debug盘</button>
       <button type="button" id="btn-upgrade">升级选中</button>
     </div>
@@ -345,7 +346,7 @@ export function mountGameView(
     if (!hintEl.dataset.ready) {
       hintEl.dataset.ready = '1';
       hintEl.textContent =
-        '绿=可放 · 蓝=可合 · 紫虚线=生长形 · 红=非法。投影=落点，跟手=意图。';
+        '蓝=可合 · 紫虚线=生长方向 · 红=非法。叠在对子上时，用最后一小段滑动控制生长。';
     }
   };
 
@@ -354,6 +355,10 @@ export function mountGameView(
   panel.querySelector('#btn-restart')!.addEventListener('click', () => {
     selectedId = null;
     api.restart();
+  });
+  panel.querySelector('#btn-next-wave')!.addEventListener('click', () => {
+    selectedId = null;
+    api.debugNextWave();
   });
   panel.querySelector('#btn-debug')!.addEventListener('click', () => {
     selectedId = null;
@@ -411,9 +416,10 @@ export function mountGameView(
     proposalEl.style.height = `${A.h * cell - 4}px`;
     // Solid border for snap accuracy (FINDINGS: outline > soft shadow)
     proposalEl.style.borderStyle = 'solid';
+    // kind `move` = return home (cancel); free place is disabled
     if (prop.kind === 'move') {
-      proposalEl.style.background = 'rgba(74, 222, 128, 0.22)';
-      proposalEl.style.borderColor = 'rgba(74, 222, 128, 0.95)';
+      proposalEl.style.background = 'rgba(148, 163, 184, 0.2)';
+      proposalEl.style.borderColor = 'rgba(148, 163, 184, 0.85)';
     } else if (prop.kind === 'merge') {
       proposalEl.style.background = 'rgba(56, 189, 248, 0.22)';
       proposalEl.style.borderColor = 'rgba(56, 189, 248, 0.95)';
@@ -470,8 +476,7 @@ export function mountGameView(
     const aimCellX = a.x / cell;
     const aimCellY = a.y / cell;
     const F = fingerRectFromAim(aimCellX, aimCellY, pieceStart.w, pieceStart.h);
-    const enterDx = (designX - startDesign.x) / 40;
-    const enterDy = (designY - startDesign.y) / 40;
+    const { enterDx, enterDy } = recentEnter(designX, designY);
     lastProposal = proposalForLifted(g.board, g.lifted, raw, {
       fingerRect: F,
       enterDx,
@@ -513,6 +518,51 @@ export function mountGameView(
 
   let lastDesign = { x: 0, y: 0 };
   let pointerId = -1;
+  /** Recent drag samples — grow intent uses last segment, not full lift path */
+  let dragTrail: { x: number; y: number; t: number }[] = [];
+
+  const pushTrail = (x: number, y: number) => {
+    const t = performance.now();
+    dragTrail.push({ x, y, t });
+    const cut = t - 280;
+    while (dragTrail.length > 1 && dragTrail[0]!.t < cut) dragTrail.shift();
+    if (dragTrail.length > 24) dragTrail.splice(0, dragTrail.length - 24);
+  };
+
+  /**
+   * Enter delta in the same units as before (/40 design px).
+   * Prefer the last ~32 design-px of motion so a short final swipe steers growth.
+   */
+  const recentEnter = (
+    designX: number,
+    designY: number,
+  ): { enterDx: number; enterDy: number } => {
+    pushTrail(designX, designY);
+    if (dragTrail.length >= 2) {
+      const last = dragTrail[dragTrail.length - 1]!;
+      let i = dragTrail.length - 2;
+      while (i > 0) {
+        const s = dragTrail[i]!;
+        const dist = Math.hypot(last.x - s.x, last.y - s.y);
+        const dt = last.t - s.t;
+        if (dist >= 32 || dt >= 140) break;
+        i--;
+      }
+      const s = dragTrail[i]!;
+      const dist = Math.hypot(last.x - s.x, last.y - s.y);
+      if (dist >= 6) {
+        return {
+          enterDx: (last.x - s.x) / 40,
+          enterDy: (last.y - s.y) / 40,
+        };
+      }
+    }
+    // Fallback: whole drag (legacy)
+    return {
+      enterDx: (designX - startDesign.x) / 40,
+      enterDy: (designY - startDesign.y) / 40,
+    };
+  };
 
   const onPointerDown = (e: PointerEvent) => {
     const g = api.get();
@@ -550,6 +600,7 @@ export function mountGameView(
     };
     startDesign = d;
     lastDesign = d;
+    dragTrail = [{ x: d.x, y: d.y, t: performance.now() }];
 
     dragEl = document.createElement('div');
     dragEl.className = 'piece piece-dragging';
@@ -596,13 +647,16 @@ export function mountGameView(
     if (!dragging) return;
     dragging = false;
     const d = toDesign(e.clientX, e.clientY) ?? lastDesign;
-    updateProposalFromDesign(d.x, d.y);
-    const prop = lastProposal;
-    const cellPos = prop?.ghost ?? rawGhostFromDesign(d.x, d.y);
-    const designDx = d.x - startDesign.x;
-    const designDy = d.y - startDesign.y;
+    // CRITICAL: 松手只认最后一帧预览，禁止再 proposeDrop（否则 enter/抖动会改掉 T*）
+    const frozenProp = lastProposal;
+    const cellPos =
+      frozenProp?.ghost ?? rawGhostFromDesign(d.x, d.y);
+    // design delta only as fallback if frame lacks growDir
+    const { enterDx, enterDy } = recentEnter(d.x, d.y);
+    const designDx = enterDx * 40;
+    const designDy = enterDy * 40;
 
-    // Snap floating piece to proposal rect, then commit
+    // Snap floating piece to proposal rect, then commit frozen frame
     const t0 = performance.now();
     const startScale = liftScale;
     const fromLeft = dragEl
@@ -629,12 +683,11 @@ export function mountGameView(
       }
       dragEl?.remove();
       dragEl = null;
-      const commitProp = lastProposal;
       paintProposal(null, pieceStart);
       mergeShapeEl.style.display = 'none';
       lastProposal = null;
-      // Commit last preview frame only
-      api.dropAt(cellPos, designDx, designDy, commitProp);
+      // Commit the frozen preview frame only (not a recomputed one)
+      api.dropAt(cellPos, designDx, designDy, frozenProp);
     };
     cancelAnimationFrame(dropSnapRaf);
     dropSnapRaf = requestAnimationFrame(tick);

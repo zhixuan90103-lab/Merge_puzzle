@@ -1,12 +1,12 @@
 import { cloneBoard, getPiece } from './board';
 import { dealAfterClear, dealDebugNear64, dealOpening } from './deal';
-import { isDeadlock, isPlayable } from './deadlock';
+import { isDeadlock, isForcedLoss, isPlayable, isSafeToContinue } from './deadlock';
 import { proposeDrop, type DropProposal } from './dropResolve';
 import { tryMerge, trendFromApproachDelta } from './merge';
 import { sizeForValue } from './shapes';
 import { trySpawnAfterMerge } from './spawn';
 import { playMergePlan, type VisualPiece } from './timeline';
-import { unlockedColorsForWave } from './progress';
+import { unlockedColorsForWave, waveIntroMessage } from './progress';
 import type { BoardState, Orientation, Piece } from './types';
 
 export type GameStatus = 'playing' | 'dead';
@@ -48,7 +48,7 @@ export function createGame() {
   let model: GameModel = {
     board: dealOpening(2, 1),
     status: 'playing',
-    message: '同色可合；异色不合。把挡路的异色 4 推开，才能合满屏',
+    message: waveIntroMessage(1),
     wave: 1,
     unlockedColors: 2,
     lifted: null,
@@ -74,7 +74,7 @@ export function createGame() {
       set({
         board,
         status: 'dead',
-        message: `${message} · 走不动了，点重开`,
+        message: `${message} · 无法再合并，点重开`,
         lifted: null,
         spawnFlashIds: [],
         animating: false,
@@ -115,16 +115,18 @@ export function createGame() {
     board: BoardState,
     createdValue: number,
     piecesBefore: number,
+    mergeColor = 0,
   ) => {
     if (createdValue === 64) {
       // Full screen clear → next wave; color count follows wave schedule (not +1 always).
       const wave = model.wave + 1;
       const unlocked = unlockedColorsForWave(wave);
       const next = dealAfterClear(unlocked, wave);
+      const intro = waveIntroMessage(wave);
       const msg =
         unlocked > model.unlockedColors
-          ? `满屏消除 · 解锁第 ${unlocked} 色 · 第 ${wave} 关`
-          : `满屏消除 · 第 ${wave} 关 · ${unlocked} 色`;
+          ? `满屏消除 · 解锁第 ${unlocked} 色 · ${intro}`
+          : `满屏消除 · ${intro}`;
       set({
         board: next,
         status: 'playing',
@@ -140,21 +142,28 @@ export function createGame() {
       return;
     }
 
-    // Multi-spawn when many pushed off; prefer merge partners (not random lonely 4)
+    // Closed board: only refill cells freed by push/clip; pack to 64
+    // Prefer the color just merged so we don't feed enemy equal-volume walls.
     const spawn = trySpawnAfterMerge(
       board,
       model.unlockedColors,
       model.wave,
       piecesBefore,
+      { color: mergeColor, value: createdValue },
     );
     const spawned = spawn.spawnedIds.length > 0;
     const note = `合并 → ${createdValue} · ${spawn.label}`;
 
-    if (isPlayable(spawn.board)) {
+    // Terminal: no pairs, or only one-move death (32+32→64 counts as live win path)
+    const forced = isForcedLoss(spawn.board);
+    const dead = !isPlayable(spawn.board) || forced || isDeadlock(spawn.board);
+    if (dead) {
       set({
         board: spawn.board,
-        status: 'playing',
-        message: note,
+        status: 'dead',
+        message: forced
+          ? `${note} · 死局：唯一的合会把自己走死，点重开`
+          : `${note} · 无法再合并，点重开`,
         lifted: null,
         lastSpawn: spawned,
         spawnFlashIds: spawn.spawnedIds,
@@ -164,11 +173,12 @@ export function createGame() {
       return;
     }
 
-    const dead = isDeadlock(spawn.board);
     set({
       board: spawn.board,
-      status: dead ? 'dead' : 'playing',
-      message: dead ? `${note} · 走不动了，点重开` : note,
+      status: 'playing',
+      message: isSafeToContinue(spawn.board)
+        ? note
+        : `${note} · 局面危险`,
       lifted: null,
       lastSpawn: spawned,
       spawnFlashIds: spawn.spawnedIds,
@@ -190,7 +200,7 @@ export function createGame() {
       set({
         board: dealOpening(2, 1),
         status: 'playing',
-        message: '重新开局 · 异色 4 需推开才能满屏',
+        message: `重新开局 · ${waveIntroMessage(1)}`,
         wave: 1,
         unlockedColors: 2,
         lifted: null,
@@ -207,6 +217,25 @@ export function createGame() {
         board: dealDebugNear64(model.unlockedColors),
         status: 'playing',
         message: `Debug 盘 · ${model.unlockedColors} 色`,
+        lifted: null,
+        lastSpawn: false,
+        spawnFlashIds: [],
+        animating: false,
+        visualPieces: null,
+      });
+    },
+    /** 试玩用：跳过满屏，直接进下一关开局剧本 */
+    debugNextWave: () => {
+      cancelAnim?.();
+      cancelAnim = null;
+      const wave = model.wave + 1;
+      const unlocked = unlockedColorsForWave(wave);
+      set({
+        board: dealAfterClear(unlocked, wave),
+        status: 'playing',
+        message: `Debug 跳关 · ${waveIntroMessage(wave)}`,
+        wave,
+        unlockedColors: unlocked,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -314,7 +343,7 @@ export function createGame() {
               cancelAnim = null;
               // startBoard = after absorb A; +1 ≈ A so lost ≈ pushed off + absorbed
               const piecesBefore = result.startBoard.pieces.length + 1;
-              afterMerge(finalBoard, result.createdValue, piecesBefore);
+              afterMerge(finalBoard, result.createdValue, piecesBefore, A.color);
             },
           }).cancel;
           return;
@@ -327,20 +356,21 @@ export function createGame() {
             : result.reason === 'orient'
               ? '朝向不同：横只能合横，竖只能合竖'
               : result.reason === 'place'
-                ? '合失败：挡路推不开'
+                ? '合失败：预览方向推不开（或挡路）'
                 : `合失败（${result.reason}）`,
         );
         return;
       }
 
+      // kind `move` = return home only (free place disabled)
       if (proposal.kind === 'move') {
         const board = cloneBoard(model.board);
-        board.pieces.push({ ...A, x: gx, y: gy });
-        checkDead(board, '搬家');
+        board.pieces.push({ ...A, x: A.x, y: A.y });
+        checkDead(board, '放回原位');
         return;
       }
 
-      bounceBack(A, proposal.reason || '无法放置，弹回');
+      bounceBack(A, proposal.reason || '只能拖去合并，弹回');
     },
     upgradeSelected: (pieceId: number) => {
       if (model.animating) return;

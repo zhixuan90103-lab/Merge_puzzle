@@ -896,7 +896,11 @@ export function tryMerge(
   type Cand = { x: number; y: number; w: number; h: number; score: number };
   const cands: Cand[] = [];
 
-  // Intent preview T*: try this first (and prefer exclusively if grow works)
+  /**
+   * Preview T* is authoritative: if the player committed a purple shape, only that
+   * grow-to is allowed. Never silently fall back to solid-union / other axes
+   * (that caused “紫框向上、松手却变横 32”).
+   */
   if (opts?.forcedTarget) {
     const ft = opts.forcedTarget;
     if (
@@ -904,8 +908,38 @@ export function tryMerge(
       isValidGrowTarget(B, ft) &&
       rectInBounds(ft.x, ft.y, ft.w, ft.h)
     ) {
-      cands.push({ ...ft, score: 1_000_000 });
+      const trial = cloneBoard(base);
+      const startBoard = cloneBoard(trial);
+      const fromB = getPiece(trial, B.id);
+      if (fromB) {
+        const toPiece: Piece = {
+          id: B.id,
+          value: newValue,
+          color: B.color,
+          x: ft.x,
+          y: ft.y,
+          w: ft.w,
+          h: ft.h,
+        };
+        const steps: AtomicStep[] = [];
+        if (tryGrowInPlace(trial, B.id, fromB, toPiece, steps)) {
+          return {
+            ok: true,
+            board: trial,
+            createdValue: newValue,
+            startBoard,
+            plan: {
+              steps,
+              createdValue: newValue,
+              anchorId: B.id,
+            },
+          };
+        }
+      }
+      // Preview said this T* was legal — do not pick a different shape
+      return { ok: false, reason: 'place' };
     }
+    // Invalid forced geometry — fall through to search (no usable preview)
   }
 
   /** Strong preference: expand along player approach; oppose = heavy penalty. */
@@ -1093,7 +1127,7 @@ export function tryMerge(
     };
     const steps: AtomicStep[] = [];
     if (!tryGrowInPlace(trial, B.id, fromB, toPiece, steps)) continue;
-    // isPlayable only (move or potential contact merge) — O(grid), not O(tryMergeⁿ)
+    // isPlayable only (any mergeable pair) — cheap, not O(tryMergeⁿ)
     const live = isPlayable(trial);
     const score = pl.score + (live ? 200_000 : -100_000);
     okList.push({

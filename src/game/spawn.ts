@@ -7,7 +7,7 @@
  * - Never call isDeadlock / hasLegalMerge per cell
  */
 import { allocId, canPlaceRect, cloneBoard, upsertPiece } from './board';
-import { hasLegalMove, hasSustainablePlay, isPlayable } from './deadlock';
+import { hasSustainablePlay, isPlayable } from './deadlock';
 import {
   boardActiveColorWeights,
   colorsPresentOnBoard,
@@ -95,9 +95,10 @@ function poolForProgress(
 ): SpawnSpec[] {
   const u = Math.max(1, Math.min(MAX_COLORS, unlockedColors || 1));
   const w = Math.max(1, wave || 1);
-  // 第1关：大块池（与 unlocked=2 解耦）
+  // 教学前段：大块 / 友好 4·2 池；第5关起按盘面 max 切压力
   if (w === 1) return SPAWN_WAVE1;
-  if (u <= 2 || w <= 3) return SPAWN_WAVE2;
+  if (w <= 4) return SPAWN_WAVE2;
+  if (u <= 2) return SPAWN_WAVE2;
   const maxV = maxPieceValue(board);
   if (maxV >= 16) return SPAWN_LATE;
   if (maxV >= 8) return SPAWN_MID;
@@ -128,41 +129,6 @@ function occupiedCells(board: BoardState): number {
 
 function freeCells(board: BoardState): number {
   return GRID_SIZE * GRID_SIZE - occupiedCells(board);
-}
-
-/** True if some color+value already has ≥2 pieces (merge material exists). */
-function hasMergeMaterial(board: BoardState): boolean {
-  const counts = countByColorValue(board);
-  for (const n of counts.values()) {
-    if (n >= 2) return true;
-  }
-  return false;
-}
-
-/**
- * How many partner pieces to inject after a merge.
- * Always ≥1 when there is free space — never “合完完全不出块”.
- * Dense boards still only get 1; sparse / many pushed → up to 3.
- */
-export function spawnBudget(
-  board: BoardState,
-  piecesBefore: number,
-): number {
-  const free = freeCells(board);
-  if (free <= 0) return 0;
-  // Tight board: still try exactly one (partner or small pair elsewhere)
-  if (free < 8) return 1;
-  if (free < 14) return 1;
-
-  const after = board.pieces.length;
-  const lost = Math.max(0, piecesBefore - after);
-  let n = 1;
-  if (lost >= 2 && free >= 16) n += 1;
-  if (lost >= 4 && free >= 28) n += 1;
-  if (after <= 2 && free >= 16) n = Math.max(n, 2);
-  if (!hasMergeMaterial(board)) n = Math.max(n, 1);
-  n = Math.min(n, Math.max(1, Math.floor(free / 6)));
-  return Math.min(3, n);
 }
 
 function shuffleInPlace<T>(arr: T[]): void {
@@ -537,7 +503,8 @@ function spawnPartnerFor(
       // Prefer sustainable: can move, or merge won't instant-death
       if (!hasSustainablePlay(r.board)) continue;
       let sc = 100 + scoreNearSame(board, value, color, e.x, e.y, w, h);
-      if (hasLegalMove(r.board)) sc += 40; // not forced to merge only
+      // Free place disabled — prefer boards that still have a merge pair after this spawn
+      if (isPlayable(r.board)) sc += 40;
       if (freeCells(r.board) >= 4) sc += 15;
       if (sc > bestSc) {
         bestSc = sc;
@@ -569,220 +536,10 @@ function forcePartnerSpawn(
 }
 
 /**
- * Inject two identical small pieces (same color) so they can merge each other.
- * Accepts if board is playable OR at least has two same color+value (material for later).
+ * Post-merge fill (closed full board):
+ * - Only when push/clip freed cells (area < 64)
+ * - Pack until area === 64; prefer partners / merge hint; avoid softlock
+ * @see fill.ts
  */
-function spawnFreshMergePair(
-  board: BoardState,
-  unlocked: number,
-  wave: number,
-): { board: BoardState; ids: number[]; label: string } | null {
-  const present = colorsPresentOnBoard(board.pieces, unlocked);
-  const weights = boardActiveColorWeights(wave, unlocked, present);
-  // Prefer colors still on board (exile loop)
-  const color = pickWeightedColor(weights);
-
-  const candidates: { value: number; orient: Orientation }[] = [
-    { value: 2, orient: 'h' },
-    { value: 2, orient: 'v' },
-    { value: 4, orient: 'h' },
-    { value: 1, orient: 'h' },
-  ];
-
-  for (const c of candidates) {
-    const { w, h } = sizeForValue(c.value, c.orient);
-    if (w * h !== c.value) continue;
-    if (freeCells(board) < c.value * 2) continue;
-    const spots = allPlacements(board, w, h);
-    if (spots.length < 2) continue;
-    shuffleInPlace(spots);
-
-    for (let i = 0; i < Math.min(spots.length, 40); i++) {
-      const a = spots[i]!;
-      const mid = commitPlace(board, c.value, c.orient, color, a.x, a.y, true);
-      if (!mid || mid.spawnedId == null) continue;
-      const spots2 = allPlacements(mid.board, w, h);
-      shuffleInPlace(spots2);
-      for (const b of spots2.slice(0, 40)) {
-        // Allow unplayable intermediate geometry; accept if material or playable
-        const fin = commitPlace(mid.board, c.value, c.orient, color, b.x, b.y, true);
-        if (!fin || fin.spawnedId == null) continue;
-        // Reject “only merge then die”
-        if (!hasSustainablePlay(fin.board)) continue;
-        return {
-          board: fin.board,
-          ids: [mid.spawnedId, fin.spawnedId],
-          label: `对刷 ${c.value}·色${color + 1}×2`,
-        };
-      }
-    }
-  }
-  return null;
-}
-
-/** Single small piece that completes a board orphan or seeds material. */
-function spawnOneSmall(
-  board: BoardState,
-  unlocked: number,
-  wave: number,
-): SpawnResult | null {
-  // Prefer partner for any orphan that fits
-  for (const o of listOrphans(board)) {
-    if (o.value > freeCells(board)) continue;
-    const r = spawnPartnerFor(board, o.value, o.color);
-    if (r) return r;
-  }
-  // Place one 2/4/1 matching a color still on board
-  const present = colorsPresentOnBoard(board.pieces, unlocked);
-  const color = pickWeightedColor(boardActiveColorWeights(wave, unlocked, present));
-  for (const value of [2, 4, 1] as const) {
-    for (const orient of ['h', 'v'] as Orientation[]) {
-      const { w, h } = sizeForValue(value, orient);
-      if (w * h !== value) continue;
-      const spots = samplePlacements(board, w, h, 20);
-      for (const e of spots) {
-        const r = commitPlace(board, value, orient, color, e.x, e.y, true);
-        if (!r) continue;
-        if (hasSustainablePlay(r.board)) {
-          return { ...r, label: `出块 ${value}·色${color + 1}` };
-        }
-      }
-    }
-  }
-  // Absolute last: any free cell 1
-  const spots = allPlacements(board, 1, 1);
-  if (spots.length === 0) return null;
-  shuffleInPlace(spots);
-  const e = spots[0]!;
-  return commitPlace(board, 1, 'h', color, e.x, e.y, true);
-}
-
-export type MultiSpawnResult = {
-  board: BoardState;
-  spawnedIds: number[];
-  label: string;
-};
-
-/**
- * Post-merge spawn:
- * - Always inject material when free cells > 0 (禁止“合完完全不出块”)
- * - Prefer same color+value partners; else 对刷 small pair; else one small piece
- * - Do not fill with multi-color junk; do not skip spawn just because board can still move
- */
-export function trySpawnAfterMerge(
-  board: BoardState,
-  unlockedColors: number,
-  wave: number,
-  piecesBefore: number,
-): MultiSpawnResult {
-  const unlocked = clampUnlocked(unlockedColors);
-  let cur = board;
-  const ids: number[] = [];
-  const labels: string[] = [];
-
-  if (freeCells(board) <= 0) {
-    return { board, spawnedIds: [], label: '盘满无出块' };
-  }
-
-  const budget = Math.max(1, spawnBudget(board, piecesBefore));
-
-  // ——— Phase A: complete orphans that fit (high value first) ———
-  let placed = 0;
-  const tried = new Set<string>();
-  while (placed < budget) {
-    const orphans = listOrphans(cur).filter((o) => !tried.has(`${o.color}:${o.value}`));
-    if (orphans.length === 0) break;
-    let did = false;
-    for (const o of orphans) {
-      tried.add(`${o.color}:${o.value}`);
-      if (o.value > freeCells(cur)) continue;
-      const r = spawnPartnerFor(cur, o.value, o.color);
-      if (!r || r.spawnedId == null) continue;
-      cur = r.board;
-      ids.push(r.spawnedId);
-      labels.push(r.label);
-      placed++;
-      did = true;
-      break;
-    }
-    if (!did) break;
-  }
-
-  // ——— Phase B: still need material (no pair on board) → 对刷 ———
-  const needMaterial = !hasMergeMaterial(cur) || ids.length === 0;
-  if (needMaterial && freeCells(cur) >= 2) {
-    const pair = spawnFreshMergePair(cur, unlocked, wave);
-    if (pair) {
-      cur = pair.board;
-      ids.push(...pair.ids);
-      labels.push(pair.label);
-    }
-  }
-
-  // ——— Phase C: still nothing placed → force one partner or one small ———
-  if (ids.length === 0) {
-    const r =
-      forcePartnerSpawn(cur, unlocked, wave, true) ??
-      spawnOneSmall(cur, unlocked, wave);
-    if (r?.spawnedId != null) {
-      cur = r.board;
-      ids.push(r.spawnedId);
-      labels.push(r.label);
-    }
-  }
-
-  // ——— Phase D: budget remainder — optional second partner if room ———
-  if (ids.length > 0 && ids.length < budget && freeCells(cur) >= 8) {
-    const r = forcePartnerSpawn(cur, unlocked, wave, false);
-    if (r?.spawnedId != null && (isPlayable(r.board) || hasMergeMaterial(r.board))) {
-      cur = r.board;
-      ids.push(r.spawnedId);
-      labels.push(r.label);
-    }
-  }
-
-  // ——— Phase E: if somehow still empty, last-ditch small ———
-  if (ids.length === 0 && freeCells(board) > 0) {
-    const r = spawnOneSmall(board, unlocked, wave);
-    if (r?.spawnedId != null) {
-      cur = r.board;
-      ids.push(r.spawnedId);
-      labels.push(r.label);
-    }
-  }
-
-  // Reject spawn sets that only allow a merge-then-die
-  if (ids.length > 0 && !hasSustainablePlay(cur)) {
-    // Prefer a sustainable small pair from the pre-spawn board
-    const pair = spawnFreshMergePair(board, unlocked, wave);
-    if (pair && hasSustainablePlay(pair.board)) {
-      return {
-        board: pair.board,
-        spawnedIds: pair.ids,
-        label: pair.label,
-      };
-    }
-    // One small with move room from original
-    const one = spawnOneSmall(board, unlocked, wave);
-    if (one?.spawnedId != null && hasSustainablePlay(one.board)) {
-      return {
-        board: one.board,
-        spawnedIds: [one.spawnedId],
-        label: one.label,
-      };
-    }
-    // Last resort: keep if at least playable; else no spawn (don't force death)
-    if (!isPlayable(cur) && isPlayable(board)) {
-      return { board, spawnedIds: [], label: '出块跳过(防秒死)' };
-    }
-  }
-
-  const label =
-    ids.length === 0
-      ? '无出块'
-      : ids.length === 1
-        ? labels[0]!
-        : `出${ids.length}块(${labels.join('+')})`;
-
-  return { board: cur, spawnedIds: ids, label };
-}
+export { trySpawnAfterMerge, fillToFull, spawnBudget } from './fill';
+export type { FillHint, FillResult } from './fill';
