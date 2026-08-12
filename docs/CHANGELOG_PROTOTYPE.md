@@ -3,26 +3,28 @@
 | 元数据 | 内容 |
 |--------|------|
 | 文档状态 | **与代码同步** |
-| 版本标签 | **原型 v0.4** |
+| 版本标签 | **原型 v0.5** |
 | 规则真源 | [GAME_RULES.md](./GAME_RULES.md) |
 | 架构 | [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) |
 | 拖合规格 | [research/intent/FINDINGS.md](./research/intent/FINDINGS.md) |
 
 ---
 
-## v0.4 一览（当前）
+## v0.5 一览（当前）
 
 | # | 主题 | 说明 | 代码 |
 |---|------|------|------|
-| 1 | 拖合一体 | 投影=落点，跟手=意图，紫虚线=T*；松手只认预览帧 | `dropResolve` `view` `game` |
-| 2 | 合并命中 | **重叠≥1**；边邻只搬家；放回原位不合 | `dropResolve` |
-| 3 | 生长意图 | `classifySide(F,B)`；碎块不主导方向；真空槽可双侧 | `dropResolve` |
-| 4 | 推挤 | 2V 严格更大；盘内可推；链推；投影可压可推小块 | `merge` `dropResolve` |
-| 5 | 生长约束 | 在盘内；单轴双侧合法；`forcedTarget` 执行预览形 | `merge` |
-| 6 | 动画 | 连续 keyframe；被推不浮起；出盘整块滑；结算裁切 | `timeline` |
-| 7 | 结算性能 | `isPlayable` / `isDeadlock` 分层；禁 tryMerge 重入 | `deadlock` `spawn` |
-| 8 | 开局 | 底边整齐、少 1、上半空 | `deal` |
-| 9 | 出块 | 按 max 分阶段，中后期少 1 多 2/4 | `spawn` |
+| 1 | **色种** | 块 = 色 + 体积；同色同体积才合；异色不合 | `types` `shapes.canMergePair` |
+| 2 | **满屏循环** | 合成 64 → 清盘重制；色种 +1（上限 5） | `game.afterMerge` `deal` |
+| 3 | **出块带色** | spawn / 开局按 `unlockedColors` 刷色 | `spawn` `deal` |
+| 4 | **推** | 仍只比体积 | `merge` |
+| 5 | 拖合一体 | 投影=落点，跟手=意图，紫虚线=T* | `dropResolve` `view` |
+| 6 | 合并命中 | 重叠≥1；同色门控 | `dropResolve` |
+| 7 | 动画 / 性能 / 开局形态 | 同 v0.4 | `timeline` `deadlock` `deal` |
+
+### v0.4 摘要（保留）
+
+拖合一体、重叠才合、生长意图、盘内推、isPlayable 分层、底边开局。
 
 ---
 

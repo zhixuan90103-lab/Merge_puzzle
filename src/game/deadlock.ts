@@ -10,18 +10,17 @@
 import { getPiece, pieceCells, footprintsContact, cloneBoard, pieceCenter } from './board';
 import { hasAnyMove } from './move';
 import { tryMerge, trendFromCenters } from './merge';
-import { canMergeByShape } from './shapes';
+import { canMergePair } from './shapes';
 import type { BoardState, Piece } from './types';
 
-/** Same-value pair that *might* merge (contact/overlap, shape ok) — no simulation. */
+/** Same color+value pair that *might* merge (contact/overlap, shape ok) — no simulation. */
 export function hasPotentialMerge(board: BoardState): boolean {
   const pieces = board.pieces;
   for (let i = 0; i < pieces.length; i++) {
     for (let j = i + 1; j < pieces.length; j++) {
       const A = pieces[i]!;
       const B = pieces[j]!;
-      if (A.value !== B.value) continue;
-      if (!canMergeByShape(A, B)) continue;
+      if (!canMergePair(A, B)) continue;
       if (footprintsContact(pieceCells(A), pieceCells(B))) return true;
     }
   }
@@ -57,8 +56,7 @@ export function hasLegalMerge(board: BoardState): boolean {
       if (i === j) continue;
       const A = pieces[i]!;
       const B = pieces[j]!;
-      if (A.value !== B.value) continue;
-      if (!canMergeByShape(A, B)) continue;
+      if (!canMergePair(A, B)) continue;
       if (!footprintsContact(pieceCells(A), pieceCells(B))) continue;
       const base = trendFromCenters(pieceCenter(A), pieceCenter(B));
       const trends = [
@@ -90,6 +88,46 @@ export function isDeadlock(board: BoardState): boolean {
     return !hasLegalMerge(board);
   }
   return true;
+}
+
+/**
+ * Spawn safety: board is ok if player can **move**, or if every obvious contact-merge
+ * still leaves a playable board (avoid “spawn pair → only merge → instant death”).
+ * Cap simulations for frame budget.
+ */
+export function hasSustainablePlay(board: BoardState): boolean {
+  if (board.pieces.length === 0) return true;
+  if (!isPlayable(board)) return false;
+  // Can rearrange without merging → not forced into a death merge
+  if (hasLegalMove(board)) return true;
+
+  // Only contact merges available — at least one must leave playable aftermath
+  const pieces = board.pieces;
+  let checked = 0;
+  for (let i = 0; i < pieces.length; i++) {
+    for (let j = 0; j < pieces.length; j++) {
+      if (i === j) continue;
+      const A = pieces[i]!;
+      const B = pieces[j]!;
+      if (!canMergePair(A, B)) continue;
+      if (!footprintsContact(pieceCells(A), pieceCells(B))) continue;
+      if (++checked > 8) return false;
+      const trend = trendFromCenters(pieceCenter(A), pieceCenter(B));
+      const r = tryMerge(cloneBoard(board), A.id, B.id, trend);
+      if (r.ok && isPlayable(r.board)) return true;
+      // try one alternate direction
+      const alt = {
+        ...trend,
+        dirX: -trend.dirX as -1 | 0 | 1,
+        dirY: -trend.dirY as -1 | 0 | 1,
+        dx: -trend.dx,
+        dy: -trend.dy,
+      };
+      const r2 = tryMerge(cloneBoard(board), A.id, B.id, alt);
+      if (r2.ok && isPlayable(r2.board)) return true;
+    }
+  }
+  return false;
 }
 
 export function pieceById(board: BoardState, id: number): Piece | undefined {

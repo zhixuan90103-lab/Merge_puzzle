@@ -12,13 +12,22 @@ export function shapeAxis(p: Pick<Piece, 'w' | 'h'>): ShapeAxis {
   return p.w > p.h ? 'h' : 'v';
 }
 
-/** Same value only; strips must share axis; square is free. */
+/** Same value only; strips must share axis; square is free. (No color check.) */
 export function canMergeByShape(a: Pick<Piece, 'w' | 'h' | 'value'>, b: Pick<Piece, 'w' | 'h' | 'value'>): boolean {
   if (a.value !== b.value) return false;
   const oa = shapeAxis(a);
   const ob = shapeAxis(b);
   if (oa === 's' || ob === 's') return true;
   return oa === ob;
+}
+
+/** Full merge gate: same color + same value + shape/axis. */
+export function canMergePair(
+  a: Pick<Piece, 'w' | 'h' | 'value' | 'color'>,
+  b: Pick<Piece, 'w' | 'h' | 'value' | 'color'>,
+): boolean {
+  if (a.color !== b.color) return false;
+  return canMergeByShape(a, b);
 }
 
 /** Target w×h for value + orientation (N occupies N cells). */
@@ -93,15 +102,19 @@ export function cellsOfRect(x: number, y: number, w: number, h: number): { x: nu
   return cells;
 }
 
+/** Hue per color index (max 5). Value lifts lightness. */
+const COLOR_HUES = [210, 145, 32, 300, 0];
+
+/** Fill by palette color + value tier (not value-only). */
+export function pieceFillColor(color: number, value: number): string {
+  const hue = COLOR_HUES[((color % COLOR_HUES.length) + COLOR_HUES.length) % COLOR_HUES.length]!;
+  const tier = Math.max(0, Math.min(6, Math.log2(Math.max(1, value))));
+  const sat = 58 + tier * 4;
+  const light = 38 + tier * 5;
+  return `hsl(${hue} ${sat}% ${light}%)`;
+}
+
+/** @deprecated use pieceFillColor — kept for single-color debug */
 export function valueColor(value: number): string {
-  const map: Record<number, string> = {
-    1: '#64748b',
-    2: '#0ea5e9',
-    4: '#22c55e',
-    8: '#eab308',
-    16: '#f97316',
-    32: '#ef4444',
-    64: '#a855f7',
-  };
-  return map[value] ?? '#94a3b8';
+  return pieceFillColor(0, value);
 }

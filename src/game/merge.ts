@@ -11,7 +11,7 @@ import {
   removePiece,
   upsertPiece,
 } from './board';
-import { canMergeByShape, cellsOfRect, shapeAxis, sizeCandidates } from './shapes';
+import { canMergePair, cellsOfRect, shapeAxis, sizeCandidates } from './shapes';
 import type { AtomicStep, MergePlan, Rect } from './plan';
 import { copyRect } from './plan';
 import type { BoardState, Cell, DragTrend, Orientation, Piece } from './types';
@@ -238,7 +238,8 @@ type PushRecord = { pieceId: number; from: Rect; to: Rect };
 
 /**
  * Collect every piece that must move 1 cell together with `rootIds`
- * (sokoban chain: anything in front that is smaller than merge newValue).
+ * (sokoban chain: only pieces with value < merge newValue can be pushed;
+ * equal or larger volume blocks — same number cannot push same number).
  * Returns null if a non-pushable piece blocks the path.
  */
 function collectMoverIds(
@@ -257,7 +258,7 @@ function collectMoverIds(
     if (movers.has(id) || ignoreIds.has(id)) continue;
     const p = getPiece(board, id);
     if (!p) continue;
-    // Merge result must be strictly larger than every pushed body
+    // Strictly larger than obstacle: equal volume cannot push equal
     if (p.value >= newValue) return null;
     movers.add(id);
 
@@ -604,9 +605,11 @@ function tryGrowInPlace(
   const gdy = dirY;
 
   let cur: Rect = { x: from.x, y: from.y, w: from.w, h: from.h };
+  const growColor = from.color;
   upsertPiece(board, {
     id: bId,
     value: newValue,
+    color: growColor,
     x: cur.x,
     y: cur.y,
     w: cur.w,
@@ -733,6 +736,7 @@ function tryGrowInPlace(
     upsertPiece(board, {
       id: bId,
       value: newValue,
+      color: growColor,
       x: cur.x,
       y: cur.y,
       w: cur.w,
@@ -829,8 +833,9 @@ export function tryMerge(
   const B = getPiece(base, pieceBId);
   if (!A || !B) return { ok: false, reason: 'missing' };
   if (A.id === B.id) return { ok: false, reason: 'same' };
+  if (A.color !== B.color) return { ok: false, reason: 'color' };
   if (A.value !== B.value) return { ok: false, reason: 'value' };
-  if (!canMergeByShape(A, B)) return { ok: false, reason: 'orient' };
+  if (!canMergePair(A, B)) return { ok: false, reason: 'orient' };
 
   // Ghost may heavily overlap B when "dropping on" it — also try stacked geometry
   const A_stack = stackAgainstB(A, B, trend);
@@ -1079,6 +1084,7 @@ export function tryMerge(
     const toPiece: Piece = {
       id: B.id,
       value: newValue,
+      color: B.color,
       x: pl.x,
       y: pl.y,
       w: pl.w,

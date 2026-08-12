@@ -4,8 +4,9 @@ import { isDeadlock, isPlayable } from './deadlock';
 import { proposeDrop, type DropProposal } from './dropResolve';
 import { tryMerge, trendFromApproachDelta } from './merge';
 import { sizeForValue } from './shapes';
-import { trySpawnOne } from './spawn';
+import { trySpawnAfterMerge } from './spawn';
 import { playMergePlan, type VisualPiece } from './timeline';
+import { unlockedColorsForWave } from './progress';
 import type { BoardState, Orientation, Piece } from './types';
 
 export type GameStatus = 'playing' | 'dead';
@@ -15,6 +16,8 @@ export type GameModel = {
   status: GameStatus;
   message: string;
   wave: number;
+  /** How many colors may appear (1..MAX_COLORS). Grows after each full-board clear. */
+  unlockedColors: number;
   lifted: Piece | null;
   lastSpawn: boolean;
   spawnFlashIds: number[];
@@ -43,10 +46,11 @@ export function proposalForLifted(
 
 export function createGame() {
   let model: GameModel = {
-    board: dealOpening(),
+    board: dealOpening(2, 1),
     status: 'playing',
-    message: '拖到空位搬家；相同数字且同朝向可合并',
+    message: '同色可合；异色不合。把挡路的异色 4 推开，才能合满屏',
     wave: 1,
+    unlockedColors: 2,
     lifted: null,
     lastSpawn: false,
     spawnFlashIds: [],
@@ -107,15 +111,26 @@ export function createGame() {
    * 2) Cheap spawn (isPlayable only)
    * 3) Full isDeadlock **only** if not playable — rare terminal confirm
    */
-  const afterMerge = (board: BoardState, createdValue: number) => {
+  const afterMerge = (
+    board: BoardState,
+    createdValue: number,
+    piecesBefore: number,
+  ) => {
     if (createdValue === 64) {
-      const next = dealAfterClear();
+      // Full screen clear → next wave; color count follows wave schedule (not +1 always).
       const wave = model.wave + 1;
+      const unlocked = unlockedColorsForWave(wave);
+      const next = dealAfterClear(unlocked, wave);
+      const msg =
+        unlocked > model.unlockedColors
+          ? `满屏消除 · 解锁第 ${unlocked} 色 · 第 ${wave} 关`
+          : `满屏消除 · 第 ${wave} 关 · ${unlocked} 色`;
       set({
         board: next,
         status: 'playing',
-        message: `合成 64！波次清空 → 第 ${wave} 波`,
+        message: msg,
         wave,
+        unlockedColors: unlocked,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -125,11 +140,16 @@ export function createGame() {
       return;
     }
 
-    const spawn = trySpawnOne(board);
-    const spawned = spawn.spawnedId != null;
+    // Multi-spawn when many pushed off; prefer merge partners (not random lonely 4)
+    const spawn = trySpawnAfterMerge(
+      board,
+      model.unlockedColors,
+      model.wave,
+      piecesBefore,
+    );
+    const spawned = spawn.spawnedIds.length > 0;
     const note = `合并 → ${createdValue} · ${spawn.label}`;
 
-    // Fast path: playable → resume now (no tryMerge storm)
     if (isPlayable(spawn.board)) {
       set({
         board: spawn.board,
@@ -137,14 +157,13 @@ export function createGame() {
         message: note,
         lifted: null,
         lastSpawn: spawned,
-        spawnFlashIds: spawn.spawnedId != null ? [spawn.spawnedId] : [],
+        spawnFlashIds: spawn.spawnedIds,
         animating: false,
         visualPieces: null,
       });
       return;
     }
 
-    // Terminal confirm once (expensive merge sim) — only when board looks stuck
     const dead = isDeadlock(spawn.board);
     set({
       board: spawn.board,
@@ -152,7 +171,7 @@ export function createGame() {
       message: dead ? `${note} · 走不动了，点重开` : note,
       lifted: null,
       lastSpawn: spawned,
-      spawnFlashIds: spawn.spawnedId != null ? [spawn.spawnedId] : [],
+      spawnFlashIds: spawn.spawnedIds,
       animating: false,
       visualPieces: null,
     });
@@ -169,10 +188,11 @@ export function createGame() {
       cancelAnim?.();
       cancelAnim = null;
       set({
-        board: dealOpening(),
+        board: dealOpening(2, 1),
         status: 'playing',
-        message: '重新开局',
+        message: '重新开局 · 异色 4 需推开才能满屏',
         wave: 1,
+        unlockedColors: 2,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -184,9 +204,9 @@ export function createGame() {
       cancelAnim?.();
       cancelAnim = null;
       set({
-        board: dealDebugNear64(),
+        board: dealDebugNear64(model.unlockedColors),
         status: 'playing',
-        message: 'Debug 盘：高值半成品',
+        message: `Debug 盘 · ${model.unlockedColors} 色`,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -292,7 +312,9 @@ export function createGame() {
             },
             onDone: (finalBoard) => {
               cancelAnim = null;
-              afterMerge(finalBoard, result.createdValue);
+              // startBoard = after absorb A; +1 ≈ A so lost ≈ pushed off + absorbed
+              const piecesBefore = result.startBoard.pieces.length + 1;
+              afterMerge(finalBoard, result.createdValue, piecesBefore);
             },
           }).cancel;
           return;
@@ -300,11 +322,13 @@ export function createGame() {
 
         bounceBack(
           A,
-          result.reason === 'orient'
-            ? '朝向不同：横只能合横，竖只能合竖'
-            : result.reason === 'place'
-              ? '合失败：挡路推不开'
-              : `合失败（${result.reason}）`,
+          result.reason === 'color'
+            ? '异色不能合成'
+            : result.reason === 'orient'
+              ? '朝向不同：横只能合横，竖只能合竖'
+              : result.reason === 'place'
+                ? '合失败：挡路推不开'
+                : `合失败（${result.reason}）`,
         );
         return;
       }
@@ -332,7 +356,7 @@ export function createGame() {
       p.x = Math.max(0, Math.min(8 - p.w, p.x));
       p.y = Math.max(0, Math.min(8 - p.h, p.y));
       board.pieces = board.pieces.filter((o) => o.id === p.id || !rectsOverlap(p, o));
-      if (nv === 64) afterMerge(board, 64);
+      if (nv === 64) afterMerge(board, 64, board.pieces.length);
       else set({ board, message: `Debug 升级 → ${nv}`, visualPieces: null });
     },
   };

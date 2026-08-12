@@ -8,8 +8,15 @@ export function emptyBoard(): BoardState {
 export function cloneBoard(board: BoardState): BoardState {
   return {
     nextId: board.nextId,
-    pieces: board.pieces.map((p) => ({ ...p })),
+    pieces: board.pieces.map((p) => normalizePiece(p)),
   };
+}
+
+/** Ensure color is always a finite index (missing → 0 only as last resort). */
+export function normalizePiece(p: Piece): Piece {
+  const color =
+    typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
+  return { ...p, color };
 }
 
 export function pieceCells(p: Piece): Cell[] {
@@ -46,13 +53,16 @@ export function clipRectToBoard(
   return { x: x0, y: y0, w: nw, h: nh, value: nw * nh };
 }
 
-/** Clip a piece to the board; null if fully off. */
+/** Clip a piece to the board; null if fully off. Color is never changed. */
 export function clipPieceToBoard(p: Piece): Piece | null {
   const c = clipRectToBoard(p.x, p.y, p.w, p.h);
   if (!c) return null;
+  const color =
+    typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
   return {
     id: p.id,
     value: c.value,
+    color, // same palette as before clip (green stays green)
     x: c.x,
     y: c.y,
     w: c.w,
@@ -81,6 +91,7 @@ export function removePiece(board: BoardState, id: number): void {
 }
 
 export function upsertPiece(board: BoardState, piece: Piece): void {
+  piece = normalizePiece(piece);
   const i = board.pieces.findIndex((p) => p.id === piece.id);
   if (i >= 0) board.pieces[i] = piece;
   else board.pieces.push(piece);

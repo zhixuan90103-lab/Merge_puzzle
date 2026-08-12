@@ -5,7 +5,7 @@ import {
   hitTestPiece,
 } from './dropResolve';
 import { proposalForLifted, type DropProposal, type GameModel } from './game';
-import { shapeAxis, valueColor } from './shapes';
+import { pieceFillColor, shapeAxis } from './shapes';
 import type { Piece } from './types';
 import { GRID_SIZE } from './types';
 import type { VisualPiece } from './timeline';
@@ -144,6 +144,7 @@ export function mountGameView(
     p: {
       id: number;
       value: number;
+      color?: number;
       x: number;
       y: number;
       w: number;
@@ -191,16 +192,18 @@ export function mountGameView(
           el.style.zIndex = '1';
         }
       }
-      // value may change mid-grow
+      // value/color may change mid-grow / after clip — always refresh fill
       const axis = shapeAxis(p);
       const mark = axis === 'h' ? '横' : axis === 'v' ? '竖' : '';
-      const label = `${p.value}|${mark}`;
+      const col =
+        typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
+      const label = `${p.value}|${col}|${mark}`;
+      el.style.background = pieceFillColor(col, p.value);
       if (el.dataset.label !== label) {
         el.dataset.label = label;
         el.innerHTML = mark
           ? `<span>${p.value}</span><span class="piece-axis">${mark}</span>`
           : `<span>${p.value}</span>`;
-        el.style.background = valueColor(p.value);
       }
       return;
     }
@@ -211,7 +214,11 @@ export function mountGameView(
     el.style.height = `${p.h * cell - 4}px`;
     el.style.transform = sc !== 1 ? `scale(${sc})` : '';
     el.style.transformOrigin = 'center center';
-    el.style.background = valueColor(p.value);
+    {
+      const col =
+        typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
+      el.style.background = pieceFillColor(col, p.value);
+    }
     el.style.borderRadius = '8px';
     el.style.display = 'flex';
     el.style.flexDirection = 'column';
@@ -227,7 +234,11 @@ export function mountGameView(
 
     const axis = shapeAxis(p);
     const mark = axis === 'h' ? '横' : axis === 'v' ? '竖' : '';
-    const label = `${p.value}|${mark}`;
+    const col =
+      typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
+    const label = `${p.value}|${col}|${mark}`;
+    // Always re-apply fill so clip 2→1 never sticks on wrong palette
+    el.style.background = pieceFillColor(col, p.value);
     if (el.dataset.label !== label) {
       el.dataset.label = label;
       el.innerHTML = mark
@@ -326,10 +337,10 @@ export function mountGameView(
     // Avoid layout thrash: status text only when changed
     const phase =
       g.status === 'dead' ? '失败' : g.animating ? '动画中' : '进行中';
-    const statusKey = `${g.wave}|${phase}|${g.message}`;
+    const statusKey = `${g.wave}|${g.unlockedColors}|${phase}|${g.message}`;
     if (statusKey !== lastStatusKey) {
       lastStatusKey = statusKey;
-      statusEl.textContent = `波次 ${g.wave} · ${phase}\n${g.message}`;
+      statusEl.textContent = `波次 ${g.wave} · ${g.unlockedColors} 色 · ${phase}\n${g.message}`;
     }
     if (!hintEl.dataset.ready) {
       hintEl.dataset.ready = '1';
@@ -355,7 +366,7 @@ export function mountGameView(
   // ——— Drag: hit-test lift · continuous proposal · commit same rules ———
   let dragging = false;
   let dragEl: HTMLElement | null = null;
-  let pieceStart = { x: 0, y: 0, w: 1, h: 1, value: 1, id: 0 };
+  let pieceStart = { x: 0, y: 0, w: 1, h: 1, value: 1, color: 0, id: 0 };
   let startDesign = { x: 0, y: 0 };
   let liftScale = 1;
   let liftRaf = 0;
@@ -534,6 +545,7 @@ export function mountGameView(
       w: hit.w,
       h: hit.h,
       value: hit.value,
+      color: hit.color,
       id: hit.id,
     };
     startDesign = d;
@@ -550,7 +562,15 @@ export function mountGameView(
     `;
     paintPiece(
       dragEl,
-      { id: hit.id, value: hit.value, x: 0, y: 0, w: hit.w, h: hit.h },
+      {
+        id: hit.id,
+        value: hit.value,
+        color: hit.color,
+        x: 0,
+        y: 0,
+        w: hit.w,
+        h: hit.h,
+      },
       { lifting: true, scale: 1 },
     );
     dragLayer.appendChild(dragEl);

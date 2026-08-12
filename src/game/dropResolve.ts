@@ -7,7 +7,7 @@
  * - merge: ≥1 cell overlap; orient first; T* from slot/unilateral
  */
 import { canPlaceRect, pieceCenter } from './board';
-import { canMergeByShape, cellsOfRect, sizeCandidates } from './shapes';
+import { canMergePair, cellsOfRect, sizeCandidates } from './shapes';
 import type { BoardState, Orientation, Piece } from './types';
 import { GRID_SIZE } from './types';
 
@@ -64,8 +64,9 @@ export function findMergeTarget(
 
   for (const p of board.pieces) {
     if (p.id === A.id) continue;
+    if (p.color !== A.color) continue;
     if (p.value !== A.value) continue;
-    if (!canMergeByShape(A, p)) continue;
+    if (!canMergePair(A, p)) continue;
     const overlap = rectOverlapCells(gRect, p);
     // Strict: must stack onto B (overlap), not merely neighbor
     if (overlap < 1) continue;
@@ -218,7 +219,7 @@ function cellKey(x: number, y: number) {
 /**
  * Can T be the merge result grow target?
  * Cells may be: empty, B, ghost G, or **pushable** pieces (value < 2V).
- * Non-pushable blockers (value ≥ 2V) reject the shape.
+ * Equal volume cannot be pushed; value ≥ 2V rejects the shape.
  */
 export function canFitMergeTarget(
   board: BoardState,
@@ -360,8 +361,7 @@ export function findMergeShape(
   enterDx: number,
   enterDy: number,
 ): MergeShapePick | null {
-  if (!canMergeByShape(A, B)) return null;
-  if (A.value !== B.value) return null;
+  if (!canMergePair(A, B)) return null;
   const newValue = A.value * 2;
   if (newValue > 64) return null;
 
@@ -529,13 +529,13 @@ export function proposeDrop(
   const merge = findMergeTarget(board, A, ghost);
   const newValue = A.value * 2;
 
-  // Footprint occupation: allow B + pushable (value < 2V); reject hard blockers
+  // Footprint occupation: allow B + pushable (value < 2V); equal cannot push equal
   for (const p of board.pieces) {
     const ov = rectOverlapCells(G, p);
     if (ov <= 0) continue;
     if (merge && p.id === merge.target.id) continue;
     // Same-value other piece: ignore if we already chose a target
-    if (p.value === A.value && canMergeByShape(A, p)) continue;
+    if (p.color === A.color && p.value === A.value && canMergePair(A, p)) continue;
     // Pushable debris under ghost OK when merging (will be shoved by grow)
     if (merge && p.value < newValue) continue;
     return {

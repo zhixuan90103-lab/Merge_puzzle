@@ -12,6 +12,7 @@ import {
 export type VisualPiece = {
   id: number;
   value: number;
+  color: number;
   x: number;
   y: number;
   w: number;
@@ -36,6 +37,7 @@ const USE_GLOBAL_EASE = true;
 type PieceTrack = {
   id: number;
   value: number;
+  color: number;
   /** Keyframe rects at integer step boundaries [0 .. n] */
   keys: Rect[];
   /** True if this piece moves or resizes during the plan */
@@ -53,13 +55,25 @@ function rectEq(a: Rect, b: Rect): boolean {
 }
 
 function pieceToVisual(
-  p: { id: number; value: number; x: number; y: number; w: number; h: number; opacity?: number },
+  p: {
+    id: number;
+    value: number;
+    color?: number;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    opacity?: number;
+  },
   flags?: { pushed?: boolean; growing?: boolean },
 ): VisualPiece {
   const off = isFullyOff(p);
+  const color =
+    typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
   return {
     id: p.id,
     value: p.value,
+    color,
     x: p.x,
     y: p.y,
     w: p.w,
@@ -122,6 +136,7 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
       t = {
         id: p.id,
         value: p.value,
+        color: p.color,
         keys: [],
         active: false,
         pushed: false,
@@ -144,9 +159,11 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
 
     for (const mv of step.pushes) {
       moved.add(mv.pieceId);
+      const existing = getPiece(board, mv.pieceId);
       const t = byId.get(mv.pieceId) ?? ensure({
         id: mv.pieceId,
-        value: getPiece(board, mv.pieceId)?.value ?? 1,
+        value: existing?.value ?? 1,
+        color: existing?.color ?? 0,
         x: mv.from.x,
         y: mv.from.y,
         w: mv.from.w,
@@ -163,9 +180,11 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
     const growId = step.grow.pieceId;
     moved.add(growId);
     {
+      const growPiece = getPiece(board, growId);
       const t = byId.get(growId) ?? ensure({
         id: growId,
         value: step.grow.value,
+        color: growPiece?.color ?? 0,
         x: step.grow.from.x,
         y: step.grow.from.y,
         w: step.grow.from.w,
@@ -217,6 +236,7 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
   }
 
   // Settle after animation path: half-off pieces clip once (not mid-push)
+  // Color must be preserved; update track value/color/last key for correct final paint
   for (const p of [...board.pieces]) {
     if (p.id === plan.anchorId) continue;
     if (isFullyOff(p)) {
@@ -224,8 +244,11 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
       continue;
     }
     const clipped = clipPieceToBoard(p);
-    if (!clipped) removePiece(board, p.id);
-    else if (
+    if (!clipped) {
+      removePiece(board, p.id);
+      continue;
+    }
+    if (
       clipped.w !== p.w ||
       clipped.h !== p.h ||
       clipped.x !== p.x ||
@@ -233,6 +256,23 @@ function buildTracks(startBoard: BoardState, plan: MergePlan): {
       clipped.value !== p.value
     ) {
       upsertPiece(board, clipped);
+      const t = byId.get(p.id);
+      if (t) {
+        t.value = clipped.value;
+        t.color = clipped.color;
+        if (t.keys.length > 0) {
+          t.keys[t.keys.length - 1] = {
+            x: clipped.x,
+            y: clipped.y,
+            w: clipped.w,
+            h: clipped.h,
+          };
+        }
+      }
+    } else {
+      // Still refresh color on track from board (never drop to default blue)
+      const t = byId.get(p.id);
+      if (t) t.color = clipped.color;
     }
   }
 
@@ -313,6 +353,7 @@ export function playMergePlan(
           {
             id: track.id,
             value: track.value,
+            color: track.color,
             x: r.x,
             y: r.y,
             w: r.w,
