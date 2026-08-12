@@ -1,9 +1,9 @@
 # 需求整理（历史）
 
-> **过时。** 现行玩法真源：[GAME_RULES.md](./GAME_RULES.md) **v0.6**。  
+> **过时。** 现行玩法真源：[GAME_RULES.md](./GAME_RULES.md) **v0.8**。  
 > 下文保留 0.3 期讨论，仅供回溯。
 
-配套（现行）：[GAME_RULES.md](./GAME_RULES.md) · [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) · [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md)
+配套（现行）：[GAME_RULES.md](./GAME_RULES.md) · [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) · [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) · [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md)
 
 | 元数据 | 内容 |
 |--------|------|

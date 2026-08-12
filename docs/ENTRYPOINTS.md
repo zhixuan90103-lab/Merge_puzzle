@@ -8,6 +8,7 @@
 |------|------|
 | `npm run dev` | http://127.0.0.1:5200/ |
 | `npm run build` | `tsc` 检查 + `dist/`（相对路径） |
+| `npm run validate:levels` | 关卡布局/可玩/清异色/双 32 回归 |
 | `npm run cap:sync` | build + cap sync ios |
 | `npm run ios:bootstrap` | add ios + 注入插件 + sync |
 | `npm run ios` | sync + open Xcode |
@@ -25,7 +26,7 @@ index.html
        → createGame + mountGameView(#stage, #ui-root)
 ```
 
-玩法规则见 [GAME_RULES.md](./GAME_RULES.md) v0.6。
+玩法规则见 [GAME_RULES.md](./GAME_RULES.md) **v0.8**。
 
 ## 3. DOM
 
@@ -53,13 +54,15 @@ Xcode → BridgeViewController
 | 要改 | 文件 |
 |------|------|
 | **玩法规则** | `docs/GAME_RULES.md` → 再改 `src/game/*` |
+| 关卡布局 | `src/game/deal.ts` · 校验 `npm run validate:levels` |
+| 色种/文案 | `src/game/progress.ts` |
 | base / 端口 | `vite.config.ts` |
 | appId | `capacitor.config.ts` |
 | 设计分辨率 | `design.ts` + `style.css` |
 | 震动原生 | `plugins/native-haptics/*.swift` + bootstrap |
 | 启动 / HUD | `index.html` + `main.ts` |
 
-## 6. 玩法挂接（v0.4）
+## 6. 玩法挂接（v0.8）
 
 ```
 main.ts
@@ -67,11 +70,16 @@ main.ts
   → createGame()                    // game.ts
   → mountGameView(#stage, #ui-root) // view.ts
        → hitTest / beginLift
-       → proposeDrop(F,G,origin) → 绿|蓝+T*|红|放回
+       → proposeDrop(F,G,origin) → 蓝可合 | 灰原位 | 红非法 + T*
        → dropAt(G, Δ, frame)
-            ├ place → 搬家
-            ├ merge → tryMerge(forcedTarget: T*) → playMergePlan → spawn
-            └ illegal → 弹回
+            ├ merge → tryMerge(forcedTarget: T*)
+            │         → playMergePlan
+            │         → afterMerge
+            │              ├ 64 → dealAfterClear
+            │              ├ area<64 → fillToFull
+            │              └ !isSafeToContinue → 判负
+            └ illegal / 原位 → 弹回 / 放回
+（无 place / 无搬家；稳定态 Σ=64）
 ```
 
-规则：`GAME_RULES.md` · 架构：`ARCHITECTURE_GAME.md` · 变更：`CHANGELOG_PROTOTYPE.md`
+规则：`GAME_RULES.md` · 架构：`ARCHITECTURE_GAME.md` · 关卡：`LEVEL_DESIGN.md` · 变更：`CHANGELOG_PROTOTYPE.md`
