@@ -271,7 +271,7 @@ button:active {
 /* Board pieces */
 #board-root .board-cell {
   position: absolute;
-  border-radius: 15px;
+  border-radius: var(--piece-radius, 15px);
   background: #d6e0ea;
   box-shadow: none;
 }
@@ -291,7 +291,7 @@ button:active {
 
 #board-root .piece-depth {
   top: 3px;
-  bottom: -4px;
+  bottom: -2.5px;
   right: -2px;
   background:
     linear-gradient(
@@ -301,7 +301,7 @@ button:active {
       var(--piece-depth) 100%
     );
   z-index: 0;
-  box-shadow: 0 5px 8px rgba(var(--piece-shadow), 0.18);
+  box-shadow: 0 4px 7px rgba(var(--piece-shadow), 0.16);
 }
 
 #board-root .piece-face {

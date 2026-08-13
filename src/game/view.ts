@@ -31,6 +31,9 @@ export type BoardLayout = {
 };
 
 const CELL_INSET = 1.5;
+const BOARD_PADDING = 10;
+const PIECE_RADIUS = 15;
+const BOARD_RADIUS = PIECE_RADIUS + BOARD_PADDING;
 const PIECE_SHINE =
   '<svg class="piece-shine" viewBox="0 0 22 30" aria-hidden="true"><path d="M4.2 3.8C12.3 3.8 18.1 9.7 18.1 17.8V25.5" /></svg>';
 
@@ -56,21 +59,31 @@ export function mountGameView(
   const boardRoot = document.createElement('div');
   boardRoot.id = 'board-root';
   boardRoot.style.cssText = `
-    position:absolute; left:${boardLayout.originX}px; top:${boardLayout.originY}px;
-    width:${boardLayout.size}px; height:${boardLayout.size}px;
+    position:absolute; left:${boardLayout.originX - BOARD_PADDING}px; top:${boardLayout.originY - BOARD_PADDING}px;
+    width:${boardLayout.size + BOARD_PADDING * 2}px; height:${boardLayout.size + BOARD_PADDING * 2}px;
     z-index:1; touch-action:none;
-    background: #eef2f5;
+    background: #f7f8f8;
     border: 0;
-    border-radius: 11px;
+    border-radius: ${BOARD_RADIUS}px;
     box-shadow:
-      0 0 0 9px #f7f8f8,
-      0 0 0 13px #c5cdd2,
+      0 0 0 3px #c5cdd2,
       inset 0 2px 7px rgba(95,104,112,0.16),
       inset 0 1px 0 rgba(255,255,255,0.9),
       0 16px 24px rgba(55,98,132,0.24);
     overflow: visible;
   `;
   stage.appendChild(boardRoot);
+
+  const boardInner = document.createElement('div');
+  boardInner.className = 'board-inner';
+  boardInner.style.cssText = `
+    position:absolute; left:${BOARD_PADDING}px; top:${BOARD_PADDING}px;
+    width:${boardLayout.size}px; height:${boardLayout.size}px;
+    --piece-radius:${PIECE_RADIUS}px;
+    background:#eef2f5; border-radius:${PIECE_RADIUS + 2}px;
+    overflow:visible;
+  `;
+  boardRoot.appendChild(boardInner);
 
   const gridLayer = document.createElement('div');
   gridLayer.className = 'board-grid-cells';
@@ -86,46 +99,46 @@ export function mountGameView(
       gridLayer.appendChild(c);
     }
   }
-  boardRoot.appendChild(gridLayer);
+  boardInner.appendChild(gridLayer);
 
   const piecesLayer = document.createElement('div');
   piecesLayer.style.cssText = 'position:absolute;inset:0;';
-  boardRoot.appendChild(piecesLayer);
+  boardInner.appendChild(piecesLayer);
 
   const dragLayer = document.createElement('div');
   dragLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2000;';
-  boardRoot.appendChild(dragLayer);
+  boardInner.appendChild(dragLayer);
 
   /** Apple-style drop proposal shadow (sessionDidUpdate) */
   const proposalEl = document.createElement('div');
   proposalEl.className = 'drop-proposal';
   proposalEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:5; display:none;
-    border-radius:14px; box-sizing:border-box;
+    border-radius:${PIECE_RADIUS}px; box-sizing:border-box;
     border:2px dashed transparent;
     transition: left 40ms linear, top 40ms linear, background 80ms ease, border-color 80ms ease;
   `;
-  boardRoot.appendChild(proposalEl);
+  boardInner.appendChild(proposalEl);
 
   const targetRingEl = document.createElement('div');
   targetRingEl.className = 'merge-target-ring';
   targetRingEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:4; display:none;
-    border-radius:16px; box-sizing:border-box;
+    border-radius:${PIECE_RADIUS}px; box-sizing:border-box;
     border:2px solid #5ec8ff; box-shadow:0 0 0 3px rgba(94,200,255,0.22);
     transition: border-color 80ms ease, box-shadow 80ms ease;
   `;
-  boardRoot.appendChild(targetRingEl);
+  boardInner.appendChild(targetRingEl);
 
   /** T* — same plastic body as the piece, translucent. */
   const mergeShapeEl = document.createElement('div');
   mergeShapeEl.className = 'piece merge-shape-preview';
   mergeShapeEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:3; display:none;
-    border-radius:15px; box-sizing:border-box; opacity:0.5;
+    border-radius:${PIECE_RADIUS}px; box-sizing:border-box; opacity:0.5;
   `;
   mergeShapeEl.innerHTML = `<span class="piece-depth"></span><span class="piece-face"></span>`;
-  boardRoot.appendChild(mergeShapeEl);
+  boardInner.appendChild(mergeShapeEl);
 
   let tStarAnimRaf = 0;
   let tStarKey = '';
@@ -154,8 +167,8 @@ export function mountGameView(
    * Goo overlay on top of everything. Pieces stay as-is.
    * No mask/clip — those were eating the waist.
    */
-  /** Smaller than piece 15px — blur adds extra corner rounding. */
-  const FUSION_RX = 7;
+  /** Smaller than the piece radius — blur adds extra corner rounding. */
+  const FUSION_RX = Math.round(PIECE_RADIUS * 0.55);
   const fusionSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   fusionSvg.setAttribute('class', 'fusion-goo');
   fusionSvg.setAttribute('width', String(boardLayout.size));
@@ -197,7 +210,7 @@ export function mountGameView(
       </g>
     </g>
   `;
-  boardRoot.appendChild(fusionSvg);
+  boardInner.appendChild(fusionSvg);
 
   const fusionDecor = document.createElement('div');
   fusionDecor.className = 'fusion-decor';
@@ -219,7 +232,7 @@ export function mountGameView(
   const fusionNumB = makeNum();
   const fusionNumSum = makeNum();
   fusionNumSum.classList.add('fusion-num-sum');
-  boardRoot.appendChild(fusionDecor);
+  boardInner.appendChild(fusionDecor);
 
   const placeBox = (
     el: HTMLElement,
@@ -526,7 +539,7 @@ export function mountGameView(
       el.style.setProperty('--piece-shadow', pieceShadowColor(col));
       el.style.setProperty('--shine-scale', p.w >= 2 && p.h >= 2 ? '1' : '0.72');
     }
-    el.style.borderRadius = '15px';
+    el.style.borderRadius = `${PIECE_RADIUS}px`;
     el.style.display = 'block';
     el.style.fontWeight = '800';
     el.style.fontSize = `${Math.max(12, Math.min(22, cell * 0.4))}px`;
@@ -600,7 +613,7 @@ export function mountGameView(
         el = document.createElement('div');
         el.className = 'piece';
         el.style.cssText =
-          'position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:15px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:rgba(107,101,120,0.62);box-sizing:border-box;';
+          `position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:${PIECE_RADIUS}px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:rgba(107,101,120,0.62);box-sizing:border-box;`;
         piecesLayer.appendChild(el);
         pieceEls.set(p.id, el);
         // first paint full
@@ -1102,7 +1115,7 @@ export function mountGameView(
     dragEl.className = 'piece piece-dragging';
     dragEl.style.cssText = `
       position:absolute; pointer-events:none; z-index:3000;
-      border-radius:15px; display:flex; flex-direction:column;
+      border-radius:${PIECE_RADIUS}px; display:flex; flex-direction:column;
       align-items:center; justify-content:center;
       font-weight:800; color:#0f172a; box-sizing:border-box;
       will-change:left,top,transform;
