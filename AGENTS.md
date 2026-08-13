@@ -14,6 +14,7 @@
 |------|------|
 | **[docs/GAME_RULES.md](./docs/GAME_RULES.md)** | **玩法规则真源** |
 | **[docs/DESIGN_DRAG_MERGE.md](./docs/DESIGN_DRAG_MERGE.md)** | **拖合意图 × 推挤设计（会话整理）** |
+| **[docs/DESIGN_PREVIEW.md](./docs/DESIGN_PREVIEW.md)** | **拖合预览手感（融合皮 / T* / 推预览 / 松手）** |
 | **[docs/ARCHITECTURE_GAME.md](./docs/ARCHITECTURE_GAME.md)** | 玩法模块与数据流 |
 | **[docs/LEVEL_DESIGN.md](./docs/LEVEL_DESIGN.md)** | 关卡设计原则 + 校验 |
 | **[docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md)** | 变更汇总 |
@@ -72,6 +73,7 @@
 | 规则表 | 先 `GAME_RULES` / `DESIGN_DRAG_MERGE` 再 `progress` / `deal` |
 | 关卡盘面 | `deal.ts` → `npm run validate:levels` |
 | 落点/意图 | `intent.ts` · `dragPhase.ts` · `dropResolve.ts` · `view.ts` |
+| 推挤预览 | `previewPush.ts` · [DESIGN_PREVIEW](./docs/DESIGN_PREVIEW.md) |
 | 合并推挤 | `merge.ts` · `timeline.ts` |
 | 补满/出块 | `fill.ts` · `spawn.ts` |
 | 死局 | `deadlock.ts` |

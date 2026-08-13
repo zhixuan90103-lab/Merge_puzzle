@@ -4,8 +4,9 @@
 |--------|------|
 | 状态 | **与代码对齐** |
 | 版本 | **0.9** |
-| 实现 | `intent.ts` · `dragPhase.ts` · `dropResolve.ts` · `view.ts` · `merge.ts` |
+| 实现 | `intent.ts` · `dragPhase.ts` · `dropResolve.ts` · `previewPush.ts` · `view.ts` · `merge.ts` |
 | 规则摘要 | [GAME_RULES.md](./GAME_RULES.md) |
+| 预览手感 | [DESIGN_PREVIEW.md](./DESIGN_PREVIEW.md) |
 
 本文把原型迭代中踩过的坑收成**可执行设计**，作为意图与推挤的真源。
 
@@ -121,7 +122,8 @@ else
 | `intent.ts` | 阈值常量、距离、弱拉 ghost、瞄准轴、扩张评分 |
 | `dragPhase.ts` | FREE/LOCKED 状态迁移（纯逻辑） |
 | `dropResolve.ts` | `proposeDrop` / `findMergeShape` / 目标查找 |
-| `view.ts` | 指针、弱吸附表现、haptic、冻结帧提交 |
+| `previewPush.ts` | 推挤预览：toward / pin / fly-out（见 DESIGN_PREVIEW） |
+| `view.ts` | 指针、Goo、T*、钉住换向、冻结帧提交 |
 | `merge.ts` | `tryMerge` / 面对齐推链 / 生长步进 |
 | `game.ts` | `dropAt`：LOCKED 时 A 落 B 再合 |
 

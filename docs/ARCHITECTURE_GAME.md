@@ -5,6 +5,7 @@
 | 版本 | **v0.9** |
 | 规则真源 | [GAME_RULES.md](./GAME_RULES.md) |
 | 拖合/推挤 | [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md) |
+| 预览手感 | [DESIGN_PREVIEW.md](./DESIGN_PREVIEW.md) |
 | 关卡 | [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) |
 | 变更 | [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md) |
 
@@ -27,6 +28,7 @@
 | `intent.ts` | 吸附/瞄准阈值、弱拉、扩张评分 |
 | `dragPhase.ts` | FREE/LOCKED 状态机（纯逻辑） |
 | `dropResolve.ts` | G / F / T*；两段式提案；瞄准&gt;异色&gt;空地 |
+| `previewPush.ts` | 推挤预览状态机（[DESIGN_PREVIEW](./DESIGN_PREVIEW.md)） |
 | `merge.ts` | tryMerge、面对齐推链、前缘分层；≤2V 可推 |
 | `plan.ts` · `timeline.ts` | 步进计划与连续动画 |
 | `fill.ts` | **闭包补满**：推出后 pack 至 64；配对/合后色；防补死 |

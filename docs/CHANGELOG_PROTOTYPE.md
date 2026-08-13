@@ -6,6 +6,7 @@
 | 版本标签 | **原型 v0.9** |
 | 规则真源 | [GAME_RULES.md](./GAME_RULES.md) |
 | 拖合/推挤设计 | [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md) |
+| 预览手感 | [DESIGN_PREVIEW.md](./DESIGN_PREVIEW.md) |
 | 架构 | [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) |
 | 关卡 | [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) |
 | 美术 | [ART_DIRECTION.md](./ART_DIRECTION.md) |
@@ -18,6 +19,8 @@
 **操作**：两段式（FREE 选合谁 / LOCKED 定方向）；弱吸附；瞄准 > 异色可推 > 空地边。  
 **推挤**：合后 2V 比体积；面对齐 + 拼墙 + 前缘分层；仅 `>2V` 铁门；同体积可推。  
 **美术**：浅天空壳 + 白托盘 + 软塑料五色块（代码已换皮；色值见 ART_DIRECTION「实现色板」）。  
+
+**预览手感（本轮）**：跟手不焊死 + Goo 皮；T* 半透明本体钉住/磁滞换向；推挤预览动真块、刚体出沿；松手盘内 pin、出盘滑出。设计见 DESIGN_PREVIEW。
 
 已知未收口：关 3 / 5 校验因新推规则失败（需重摆）；正式局仍显示体积数字（文档曾写默认无数字）。
 

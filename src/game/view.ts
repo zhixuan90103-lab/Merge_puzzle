@@ -20,6 +20,7 @@ import { proposalForLifted, type DropProposal, type GameModel } from './game';
 import { pieceDepthColor, pieceFillColor, pieceShadowColor, shapeAxis } from './shapes';
 import type { Piece } from './types';
 import { GRID_SIZE } from './types';
+import { createPushPreview } from './previewPush';
 import { CELL_MS, type VisualPiece } from './timeline';
 
 export type BoardLayout = {
@@ -142,277 +143,12 @@ export function mountGameView(
     mergeShapeEl.style.height = `${r.h * cell - CELL_INSET * 2}px`;
   };
 
-  type PushPrev = {
-    id: number;
-    rest: { x: number; y: number; w: number; h: number };
-    dest: { x: number; y: number; w: number; h: number };
-    off: boolean;
-    flyFrom?: { x: number; y: number; w: number; h: number };
-    flyTo?: { x: number; y: number; w: number; h: number };
-    startOp?: number;
-  };
-  let pushItems: PushPrev[] = [];
-  let pushKey = '';
-  let pushU = 0;
-  let pushFromU = 0;
-  let pushToU = 0;
-  let pushT0 = 0;
-  let pushDur = CELL_MS;
-  let lastGrowCells = 1;
-  let pushRaf = 0;
-  let pushFrozen = false;
-  let pushFly = false;
-  let pendingMergeCommit = false;
-  let pushPinned = new Map<
-    number,
-    { x: number; y: number; w: number; h: number }
-  >();
-
   const easeOutCubic = (t: number) => {
     const u = 1 - Math.max(0, Math.min(1, t));
     return 1 - u * u * u;
   };
 
-  const lerpRectPx = (
-    a: { x: number; y: number; w: number; h: number },
-    b: { x: number; y: number; w: number; h: number },
-    t: number,
-  ) => ({
-    x: a.x + (b.x - a.x) * t,
-    y: a.y + (b.y - a.y) * t,
-    w: a.w + (b.w - a.w) * t,
-    h: a.h + (b.h - a.h) * t,
-  });
-
-  const stillOnBoard = (r: { x: number; y: number; w: number; h: number }) =>
-    r.x < 8 && r.x + r.w > 0 && r.y < 8 && r.y + r.h > 0;
-
-  /** How far the inner edge is past the board. 0 if any part still on the grid. */
-  const innerOutDepth = (r: { x: number; y: number; w: number; h: number }) => {
-    if (stillOnBoard(r)) return 0;
-    let d = Infinity;
-    if (r.x >= 8) d = Math.min(d, r.x - 8);
-    if (r.x + r.w <= 0) d = Math.min(d, -(r.x + r.w));
-    if (r.y >= 8) d = Math.min(d, r.y - 8);
-    if (r.y + r.h <= 0) d = Math.min(d, -(r.y + r.h));
-    return Number.isFinite(d) ? d : 0;
-  };
-
-  const opacityForRect = (r: { x: number; y: number; w: number; h: number }) => {
-    const d = innerOutDepth(r);
-    if (d <= 0) return 0.8;
-    return Math.max(0.38, 0.68 - d * 0.1);
-  };
-
-  const pushAxis = (items: PushPrev[]) => {
-    let sx = 0;
-    let sy = 0;
-    for (const it of items) {
-      sx += it.dest.x - it.rest.x;
-      sy += it.dest.y - it.rest.y;
-    }
-    const horiz = Math.abs(sx) >= Math.abs(sy);
-    const sign = horiz ? Math.sign(sx) || 1 : Math.sign(sy) || 1;
-    return { horiz, sign };
-  };
-
-  /** Keep board layout: translate the whole leaving group just past the rim. */
-  const spreadPushChain = (items: PushPrev[]) => {
-    const leaving = items.filter((it) => it.off || !stillOnBoard(it.dest));
-    if (leaving.length === 0) return;
-    const { horiz, sign } = pushAxis(leaving);
-    const pad = 0.35;
-    let dx = 0;
-    let dy = 0;
-    if (!horiz && sign < 0) {
-      const maxB = Math.max(...leaving.map((i) => i.rest.y + i.rest.h));
-      dy = -maxB - pad;
-    } else if (!horiz && sign > 0) {
-      const minY = Math.min(...leaving.map((i) => i.rest.y));
-      dy = 8 - minY + pad;
-    } else if (horiz && sign > 0) {
-      const minX = Math.min(...leaving.map((i) => i.rest.x));
-      dx = 8 - minX + pad;
-    } else {
-      const maxR = Math.max(...leaving.map((i) => i.rest.x + i.rest.w));
-      dx = -maxR - pad;
-    }
-    for (const item of leaving) {
-      item.dest = {
-        x: item.rest.x + dx,
-        y: item.rest.y + dy,
-        w: item.dest.w,
-        h: item.dest.h,
-      };
-    }
-  };
-
-  const plantPieceRest = (item: PushPrev) => {
-    const el = pieceEls.get(item.id);
-    if (!el) return;
-    el.style.left = `${item.rest.x * cell + CELL_INSET}px`;
-    el.style.top = `${item.rest.y * cell + CELL_INSET}px`;
-    el.style.width = `${item.rest.w * cell - CELL_INSET * 2}px`;
-    el.style.height = `${item.rest.h * cell - CELL_INSET * 2}px`;
-    el.style.transform = '';
-    el.style.opacity = '1';
-  };
-
-  const applyPushPreview = (u: number, solid: boolean) => {
-    for (const item of pushItems) {
-      const el = pieceEls.get(item.id);
-      if (!el) continue;
-      if (pushFly && item.flyFrom && item.flyTo) {
-        const r = lerpRectPx(item.flyFrom, item.flyTo, u);
-        el.style.left = `${r.x * cell + CELL_INSET}px`;
-        el.style.top = `${r.y * cell + CELL_INSET}px`;
-        el.style.width = `${r.w * cell - CELL_INSET * 2}px`;
-        el.style.height = `${r.h * cell - CELL_INSET * 2}px`;
-        el.style.transform = '';
-        const fade = Math.min(1, u / 0.78);
-        el.style.opacity = String((item.startOp ?? 0.7) * (1 - fade));
-        continue;
-      }
-      const r = lerpRectPx(item.rest, item.dest, u);
-      el.style.left = `${r.x * cell + CELL_INSET}px`;
-      el.style.top = `${r.y * cell + CELL_INSET}px`;
-      el.style.width = `${r.w * cell - CELL_INSET * 2}px`;
-      el.style.height = `${r.h * cell - CELL_INSET * 2}px`;
-      el.style.transform = '';
-      el.style.opacity = String(solid ? 1 : opacityForRect(r));
-    }
-  };
-
-  const tickPushPreview = (now: number) => {
-    pushRaf = 0;
-    const raw = Math.min(1, (now - pushT0) / Math.max(1, pushDur));
-    const e = pushToU === 0 && !pushFly ? raw : easeOutCubic(raw);
-    pushU = pushFromU + (pushToU - pushFromU) * e;
-    applyPushPreview(pushU, pushFrozen);
-    if (raw < 1) {
-      pushRaf = requestAnimationFrame(tickPushPreview);
-      return;
-    }
-    if (pushToU === 0 && !pushFly) {
-      for (const item of pushItems) plantPieceRest(item);
-      pushItems = [];
-      pushKey = '';
-      pushU = 0;
-    }
-    if (pushFly && raw >= 1 && !api.get().animating) {
-      finishPushFly(api.get());
-    }
-  };
-
-  const finishPushFly = (g: GameModel) => {
-    pushFly = false;
-    pushFrozen = false;
-    pendingMergeCommit = false;
-    for (const item of pushItems) {
-      const still = g.board.pieces.find((p) => p.id === item.id);
-      const el = pieceEls.get(item.id);
-      if (!still) {
-        el?.remove();
-        pieceEls.delete(item.id);
-      } else if (el) {
-        el.style.left = `${still.x * cell + CELL_INSET}px`;
-        el.style.top = `${still.y * cell + CELL_INSET}px`;
-        el.style.width = `${still.w * cell - CELL_INSET * 2}px`;
-        el.style.height = `${still.h * cell - CELL_INSET * 2}px`;
-        el.style.opacity = '1';
-      }
-    }
-    pushItems = [];
-    pushKey = '';
-    pushU = 0;
-  };
-
-  const startPushFlyOut = () => {
-    if (pushFly || pushItems.length === 0) return;
-    const stay: PushPrev[] = [];
-    const leave: PushPrev[] = [];
-    for (const item of pushItems) {
-      if (item.off || !stillOnBoard(item.dest)) leave.push(item);
-      else stay.push(item);
-    }
-    for (const item of stay) {
-      pushPinned.set(item.id, item.dest);
-      const el = pieceEls.get(item.id);
-      if (!el) continue;
-      el.style.left = `${item.dest.x * cell + CELL_INSET}px`;
-      el.style.top = `${item.dest.y * cell + CELL_INSET}px`;
-      el.style.width = `${item.dest.w * cell - CELL_INSET * 2}px`;
-      el.style.height = `${item.dest.h * cell - CELL_INSET * 2}px`;
-      el.style.transform = '';
-      el.style.opacity = '1';
-    }
-    if (leave.length === 0) {
-      pushItems = [];
-      pushKey = '';
-      pushU = 0;
-      return;
-    }
-    pushItems = leave;
-    pushFly = true;
-    const { horiz, sign } = pushAxis(leave);
-    const extra = lastGrowCells;
-    for (const item of leave) {
-      const cur = lerpRectPx(item.rest, item.dest, pushU);
-      item.flyFrom = cur;
-      item.flyTo = {
-        x: item.dest.x + (horiz ? sign * extra : 0),
-        y: item.dest.y + (horiz ? 0 : sign * extra),
-        w: item.dest.w,
-        h: item.dest.h,
-      };
-      item.startOp = opacityForRect(cur);
-    }
-    pushFromU = 0;
-    pushToU = 1;
-    pushDur = lastGrowCells * CELL_MS;
-    pushT0 = performance.now();
-    if (pushRaf) cancelAnimationFrame(pushRaf);
-    pushRaf = requestAnimationFrame(tickPushPreview);
-  };
-
-  const startPushToward = (
-    items: PushPrev[],
-    key: string,
-    t0?: number,
-    dur?: number,
-  ) => {
-    if (key === pushKey && pushToU === 1) return;
-    const keep = new Set(items.map((it) => it.id));
-    for (const old of pushItems) {
-      if (!keep.has(old.id)) plantPieceRest(old);
-    }
-    const sameKey = key === pushKey;
-    spreadPushChain(items);
-    pushItems = items;
-    pushKey = key;
-    pushFromU = sameKey ? pushU : 0;
-    pushToU = 1;
-    pushDur = dur ?? lastGrowCells * CELL_MS;
-    pushT0 = t0 ?? performance.now();
-    if (pushRaf) cancelAnimationFrame(pushRaf);
-    pushRaf = requestAnimationFrame(tickPushPreview);
-  };
-
-  const startPushBack = () => {
-    if (pendingMergeCommit || pushFly) return;
-    if (pushItems.length === 0) {
-      pushU = 0;
-      pushKey = '';
-      return;
-    }
-    pushFromU = pushU;
-    pushToU = 0;
-    pushDur = 48;
-    pushT0 = performance.now();
-    pushKey = '';
-    if (pushRaf) cancelAnimationFrame(pushRaf);
-    pushRaf = requestAnimationFrame(tickPushPreview);
-  };
+  let lastGrowCells = 1;
 
   /**
    * Goo overlay on top of everything. Pieces stay as-is.
@@ -693,6 +429,12 @@ export function mountGameView(
   const statusEl = header.querySelector('#game-status') as HTMLElement;
   const hintEl = panel.querySelector('#game-hint') as HTMLElement;
   const pieceEls = new Map<number, HTMLElement>();
+  const push = createPushPreview({
+    cell,
+    inset: CELL_INSET,
+    pieceEls,
+    getModel: () => api.get(),
+  });
 
   /** Full style paint (lift / idle). */
   const paintPiece = (
@@ -724,18 +466,18 @@ export function mountGameView(
     const sc = opts.scale ?? 1;
     const baseZ = Math.max(1, Math.round((p.y + p.h) * 10));
 
-    // Prefer transform for motion frames (composited)
+    // Same left/top as idle — switching to translate3d on commit twitches the board.
     if (opts.motionOnly) {
       const left = p.x * cell + CELL_INSET;
       const top = p.y * cell + CELL_INSET;
       const pw = p.w * cell - CELL_INSET * 2;
       const ph = p.h * cell - CELL_INSET * 2;
-      el.style.transform = `translate3d(${left}px,${top}px,0) scale(${sc})`;
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
       el.style.width = `${pw}px`;
       el.style.height = `${ph}px`;
+      el.style.transform = sc !== 1 ? `scale(${sc})` : '';
       el.style.opacity = String(p.opacity ?? 1);
-      el.style.left = '0';
-      el.style.top = '0';
       // No float/lift for pushed pieces — same plane as board (can be shoved under grow)
       const mode = isGrowing ? 'g' : 'n';
       if (el.dataset.mode !== mode) {
@@ -844,13 +586,7 @@ export function mountGameView(
   ) => {
     const flash = new Set(flashIds);
     const live = new Set(list.map((p) => p.id));
-    const hold =
-      pushFly || pendingMergeCommit || pushPinned.size
-        ? new Set([
-            ...pushItems.map((it) => it.id),
-            ...pushPinned.keys(),
-          ])
-        : null;
+    const hold = push.holdIds();
     for (const [id, el] of pieceEls) {
       if (!live.has(id)) {
         if (hold?.has(id)) continue;
@@ -926,32 +662,7 @@ export function mountGameView(
       lastRejectNonce = g.rejectNonce;
       playRejectBlink(g.rejectFlashIds);
     }
-    if (g.animating && pushItems.length && !pushFly) {
-      pushFrozen = true;
-      startPushFlyOut();
-    } else if (pushFly) {
-      applyPushPreview(pushU, false);
-      if (!g.animating && pushU >= 1) finishPushFly(g);
-    } else if (pushItems.length) {
-      applyPushPreview(pushU, false);
-    }
-    for (const [id, dest] of pushPinned) {
-      const el = pieceEls.get(id);
-      if (!el) continue;
-      el.style.left = `${dest.x * cell + CELL_INSET}px`;
-      el.style.top = `${dest.y * cell + CELL_INSET}px`;
-      el.style.width = `${dest.w * cell - CELL_INSET * 2}px`;
-      el.style.height = `${dest.h * cell - CELL_INSET * 2}px`;
-      el.style.transform = '';
-      el.style.opacity = '1';
-    }
-    if (!g.animating && !pushFly) {
-      pushPinned.clear();
-      if (!pushItems.length) {
-        pushFrozen = false;
-        pendingMergeCommit = false;
-      }
-    }
+    push.onRender(g, lastGrowCells);
 
 
     // Avoid layout thrash: status text only when changed
@@ -1024,7 +735,7 @@ export function mountGameView(
       targetRingEl.style.display = 'none';
       mergeShapeEl.style.display = 'none';
       stopTStarAnim();
-      startPushBack();
+      push.back();
       return;
     }
     proposalEl.style.display = 'none';
@@ -1114,14 +825,14 @@ export function mountGameView(
             prop.growDirX ?? 0,
             prop.growDirY ?? 0,
           );
-          if (items.length) startPushToward(items, key, t0, growMs);
-          else startPushBack();
+          if (items.length) push.toward(items, key, t0, growMs);
+          else push.back();
         }
       }
     } else {
       mergeShapeEl.style.display = 'none';
       stopTStarAnim();
-      startPushBack();
+      push.back();
     }
   };
 
@@ -1453,8 +1164,8 @@ export function mountGameView(
       designDx = d.x - phaseState.lockFingerDesign.x;
       designDy = d.y - phaseState.lockFingerDesign.y;
     }
-    if (frozenProp?.kind === 'merge' && pushItems.length) {
-      pendingMergeCommit = true;
+    if (frozenProp?.kind === 'merge' && push.itemCount) {
+      push.setPendingCommit(true);
     }
     resetDragPhase();
     hideFusion();
@@ -1491,9 +1202,9 @@ export function mountGameView(
       lastProposal = null;
       // Commit the frozen preview frame only (not a recomputed one)
       api.dropAt(cellPos, designDx, designDy, frozenProp);
-      if (pendingMergeCommit && !api.get().animating) {
-        pendingMergeCommit = false;
-        startPushBack();
+      if (push.pendingCommit && !api.get().animating) {
+        push.setPendingCommit(false);
+        push.back();
       }
       const travelled =
         Math.hypot(d.x - liftDesign.x, d.y - liftDesign.y) > 18;
@@ -1522,7 +1233,7 @@ export function mountGameView(
       cancelAnimationFrame(liftRaf);
       cancelAnimationFrame(dropSnapRaf);
       stopTStarAnim();
-      if (pushRaf) cancelAnimationFrame(pushRaf);
+      push.destroy();
       boardRoot.remove();
       uiRoot.innerHTML = '';
     },
