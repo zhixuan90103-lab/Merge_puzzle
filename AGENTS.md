@@ -12,10 +12,11 @@
 
 | 文档 | 用途 |
 |------|------|
-| **[docs/GAME_RULES.md](./docs/GAME_RULES.md)** | **玩法规则真源 v0.8** |
+| **[docs/GAME_RULES.md](./docs/GAME_RULES.md)** | **玩法规则真源** |
+| **[docs/DESIGN_DRAG_MERGE.md](./docs/DESIGN_DRAG_MERGE.md)** | **拖合意图 × 推挤设计（会话整理）** |
 | **[docs/ARCHITECTURE_GAME.md](./docs/ARCHITECTURE_GAME.md)** | 玩法模块与数据流 |
 | **[docs/LEVEL_DESIGN.md](./docs/LEVEL_DESIGN.md)** | 关卡设计原则 + 校验 |
-| **[docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md)** | 变更汇总 v0.8 |
+| **[docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md)** | 变更汇总 |
 | [docs/ENGINEERING.md](./docs/ENGINEERING.md) | 工程约定 |
 | [docs/ENTRYPOINTS.md](./docs/ENTRYPOINTS.md) | 启动链 |
 | [docs/CORE_CONCEPTS.md](./docs/CORE_CONCEPTS.md) | L2 手感/障碍草案 |
@@ -53,25 +54,23 @@
 5. UI 只挂 `#ui-root`  
 6. 无 WebGPU 则明确失败  
 
-## 玩法硬约定（v0.8）
+## 玩法硬约定
 
 1. **主线**：合成 + 推杂色 + 单色 64 过关  
 2. **闭包满盘**：稳定态 **Σ value = 64**；合占格守恒；推出/裁切后 **fill 补满**  
-3. **合**：同色同数 + 朝向；重叠≥1；**合后形由摆放决定**；可跨盘拖到目标上  
+3. **合**：同色同数 + 朝向；两段式拖合（FREE 选 B / LOCKED 定方向）  
 4. **无自由搬家**：不能放到空格；原位松手 = 取消  
-5. **推**：障碍 **&lt; 合后 2V**；同体积不可推  
-6. **流放**：盘上无某色 → 本波不补该色  
-7. **64** → 清盘按关卡表重摆（满盘）  
-8. **失败** = 无合法合，或 **一步死**（每个合法合后都死）；**32+32→64 是胜利**  
-9. 结算：`isPlayable` 热路径；`isForcedLoss` / `isSafeToContinue` 仅合后；禁每帧 full `tryMerge`  
+5. **推**：≤2V + 面对齐/分层活塞；仅 **>2V** 铁门；详见 DESIGN_DRAG_MERGE  
+6. **意图**：瞄准 > 异色可推 > 空地边；弱吸附不强制重合  
+7. **流放 / 64 / 死局 / 结算**：同前（`isPlayable` 热路径；禁每帧 full `tryMerge`）  
 
 ## 业务改哪里
 
 | 改什么 | 文件 |
 |--------|------|
-| 规则表 | 先 `GAME_RULES` 再 `progress` / `deal` |
+| 规则表 | 先 `GAME_RULES` / `DESIGN_DRAG_MERGE` 再 `progress` / `deal` |
 | 关卡盘面 | `deal.ts` → `npm run validate:levels` |
-| 落点/意图 | `dropResolve.ts` · `view.ts` |
+| 落点/意图 | `intent.ts` · `dragPhase.ts` · `dropResolve.ts` · `view.ts` |
 | 合并推挤 | `merge.ts` · `timeline.ts` |
 | 补满/出块 | `fill.ts` · `spawn.ts` |
 | 死局 | `deadlock.ts` |

@@ -8,6 +8,7 @@ import { trySpawnAfterMerge } from './spawn';
 import { playMergePlan, type VisualPiece } from './timeline';
 import { unlockedColorsForWave, waveIntroMessage } from './progress';
 import type { BoardState, Orientation, Piece } from './types';
+import { GRID_SIZE } from './types';
 
 export type GameStatus = 'playing' | 'dead';
 
@@ -309,7 +310,15 @@ export function createGame() {
           return;
         }
         const board = cloneBoard(model.board);
-        const aPiece: Piece = { ...A, x: gx, y: gy };
+        // Soft magnet during drag may leave G off-flush; on commit seat A on B
+        // so tryMerge still has contact (preview stay weakly attracted only).
+        const seatX = proposal.locked
+          ? Math.max(0, Math.min(GRID_SIZE - A.w, target.x))
+          : gx;
+        const seatY = proposal.locked
+          ? Math.max(0, Math.min(GRID_SIZE - A.h, target.y))
+          : gy;
+        const aPiece: Piece = { ...A, x: seatX, y: seatY };
         board.pieces.push(aPiece);
 
         // Trend from preview grow dirs / finger bias (fallback)

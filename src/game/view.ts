@@ -1,9 +1,18 @@
 import type { StageLayout } from '../adapt/design';
+import { haptics } from '../utils/haptics';
+import {
+  initialDragPhase,
+  resetDragPhase as resetPhaseState,
+  stepDragPhase,
+  type DragPhaseState,
+} from './dragPhase';
 import {
   aimToGhost,
   fingerRectFromAim,
   hitTestPiece,
+  nearestMergeable,
 } from './dropResolve';
+import { lockAimCombined, SOFT_PULL_VISUAL } from './intent';
 import { proposalForLifted, type DropProposal, type GameModel } from './game';
 import { pieceFillColor, shapeAxis } from './shapes';
 import type { Piece } from './types';
@@ -95,6 +104,7 @@ export function mountGameView(
     position:absolute; pointer-events:none; z-index:4; display:none;
     border-radius:10px; box-sizing:border-box;
     border:2px solid #38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,0.25);
+    transition: border-color 80ms ease, box-shadow 80ms ease;
   `;
   boardRoot.appendChild(targetRingEl);
 
@@ -128,7 +138,9 @@ export function mountGameView(
       <button type="button" id="btn-debug">Debug盘</button>
       <button type="button" id="btn-upgrade">升级选中</button>
     </div>
-    <p id="game-hint" class="log" style="margin:8px 0 0;font-size:11px;opacity:.75;"></p>
+    <p id="game-hint" class="log" style="margin:8px 0 0;font-size:11px;opacity:.75;">
+      大拖选合谁 → 吸住后小滑定方向；不滑则优先推异色，否则空地。
+    </p>
   `;
   uiRoot.appendChild(header);
   uiRoot.appendChild(panel);
@@ -372,7 +384,6 @@ export function mountGameView(
   let dragging = false;
   let dragEl: HTMLElement | null = null;
   let pieceStart = { x: 0, y: 0, w: 1, h: 1, value: 1, color: 0, id: 0 };
-  let startDesign = { x: 0, y: 0 };
   let liftScale = 1;
   let liftRaf = 0;
   let dropSnapRaf = 0;
@@ -437,6 +448,15 @@ export function mountGameView(
         targetRingEl.style.top = `${t.y * cell}px`;
         targetRingEl.style.width = `${t.w * cell}px`;
         targetRingEl.style.height = `${t.h * cell}px`;
+        if (prop.locked) {
+          targetRingEl.style.borderColor = prop.playerAim ? '#a78bfa' : '#38bdf8';
+          targetRingEl.style.boxShadow = prop.playerAim
+            ? '0 0 0 3px rgba(167,139,250,0.28)'
+            : '0 0 0 2px rgba(56,189,248,0.3)';
+        } else {
+          targetRingEl.style.borderColor = '#38bdf8';
+          targetRingEl.style.boxShadow = '0 0 0 2px rgba(56,189,248,0.2)';
+        }
       } else {
         targetRingEl.style.display = 'none';
       }
@@ -464,6 +484,13 @@ export function mountGameView(
     }
   };
 
+  /** FREE = pick B; LOCKED = weak magnet + micro-aim (docs/DESIGN_DRAG_MERGE.md) */
+  let phaseState: DragPhaseState = initialDragPhase();
+
+  const resetDragPhase = () => {
+    phaseState = resetPhaseState();
+  };
+
   const updateProposalFromDesign = (designX: number, designY: number) => {
     const g = api.get();
     if (!g.lifted) {
@@ -471,34 +498,90 @@ export function mountGameView(
       paintProposal(null, pieceStart);
       return;
     }
+    const A = g.lifted;
     const a = aimBoardLocal(designX, designY);
     const raw = aimToGhost(a.x, a.y, cell, pieceStart.w, pieceStart.h);
     const aimCellX = a.x / cell;
     const aimCellY = a.y / cell;
     const F = fingerRectFromAim(aimCellX, aimCellY, pieceStart.w, pieceStart.h);
-    const { enterDx, enterDy } = recentEnter(designX, designY);
-    lastProposal = proposalForLifted(g.board, g.lifted, raw, {
+
+    const nearest = nearestMergeable(g.board, A, raw);
+    const stepped = stepDragPhase(phaseState, {
+      A,
+      rawGhost: raw,
+      designX,
+      designY,
+      board: g.board,
+      nearest,
+    });
+    phaseState = stepped.state;
+    if (stepped.haptic) void haptics.selection();
+
+    let enterDx = 0;
+    let enterDy = 0;
+    let playerAim = false;
+    const phase = phaseState.phase;
+
+    if (phase === 'locked' && phaseState.lockedTargetId != null && phaseState.lockB) {
+      const B = phaseState.lockB;
+      // (1) swipe after attach
+      const slideDdx = (designX - phaseState.lockFingerDesign.x) / cell;
+      const slideDdy = (designY - phaseState.lockFingerDesign.y) / cell;
+      // (2) where finger sits on B — map to grow that side after classifySide invert
+      //     finger above B center → grow up, not empty-down
+      const fcx = F.x + F.w / 2;
+      const fcy = F.y + F.h / 2;
+      const placeDdx = fcx - (B.x + B.w / 2);
+      const placeDdy = fcy - (B.y + B.h / 2);
+      const aim = lockAimCombined(
+        slideDdx,
+        slideDdy,
+        -placeDdx,
+        -placeDdy,
+      );
+      enterDx = aim.enterDx;
+      enterDy = aim.enterDy;
+      playerAim = aim.playerAim;
+    }
+
+    lastProposal = proposalForLifted(g.board, A, raw, {
       fingerRect: F,
       enterDx,
       enterDy,
       origin: { x: pieceStart.x, y: pieceStart.y },
+      phase,
+      lockedTargetId:
+        phase === 'locked' ? phaseState.lockedTargetId ?? undefined : undefined,
+      playerAim: phase === 'locked' && playerAim,
     });
-    paintProposal(lastProposal, g.lifted);
+    paintProposal(lastProposal, A);
   };
 
-  const placeDragEl = (designX: number, designY: number, scale: number) => {
+  const placeDragEl = (
+    designX: number,
+    designY: number,
+    scale: number,
+    _snapGhost?: { x: number; y: number } | null,
+  ) => {
     if (!dragEl) return;
     const a = aimBoardLocal(designX, designY);
-    // Continuous F — not grid-snapped (intent)
-    const left = a.x - (pieceStart.w * cell) / 2;
-    const top = a.y - (pieceStart.h * cell) / 2;
+    let left = a.x - (pieceStart.w * cell) / 2;
+    let top = a.y - (pieceStart.h * cell) / 2;
+    if (phaseState.phase === 'locked' && phaseState.lockB) {
+      const bx = phaseState.lockB.x * cell + 2;
+      const by = phaseState.lockB.y * cell + 2;
+      left = left + (bx - left) * SOFT_PULL_VISUAL;
+      top = top + (by - top) * SOFT_PULL_VISUAL;
+    }
     dragEl.style.left = `${left}px`;
     dragEl.style.top = `${top}px`;
     dragEl.style.width = `${pieceStart.w * cell - 4}px`;
     dragEl.style.height = `${pieceStart.h * cell - 4}px`;
     dragEl.style.transform = `scale(${scale})`;
     dragEl.style.boxShadow =
-      '0 10px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.12)';
+      phaseState.phase === 'locked'
+        ? '0 8px 18px rgba(0,0,0,0.38), 0 0 0 1.5px rgba(56,189,248,0.4)'
+        : '0 10px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.12)';
   };
 
   const animateLift = (from: number, to: number, ms: number, onDone?: () => void) => {
@@ -518,51 +601,6 @@ export function mountGameView(
 
   let lastDesign = { x: 0, y: 0 };
   let pointerId = -1;
-  /** Recent drag samples — grow intent uses last segment, not full lift path */
-  let dragTrail: { x: number; y: number; t: number }[] = [];
-
-  const pushTrail = (x: number, y: number) => {
-    const t = performance.now();
-    dragTrail.push({ x, y, t });
-    const cut = t - 280;
-    while (dragTrail.length > 1 && dragTrail[0]!.t < cut) dragTrail.shift();
-    if (dragTrail.length > 24) dragTrail.splice(0, dragTrail.length - 24);
-  };
-
-  /**
-   * Enter delta in the same units as before (/40 design px).
-   * Prefer the last ~32 design-px of motion so a short final swipe steers growth.
-   */
-  const recentEnter = (
-    designX: number,
-    designY: number,
-  ): { enterDx: number; enterDy: number } => {
-    pushTrail(designX, designY);
-    if (dragTrail.length >= 2) {
-      const last = dragTrail[dragTrail.length - 1]!;
-      let i = dragTrail.length - 2;
-      while (i > 0) {
-        const s = dragTrail[i]!;
-        const dist = Math.hypot(last.x - s.x, last.y - s.y);
-        const dt = last.t - s.t;
-        if (dist >= 32 || dt >= 140) break;
-        i--;
-      }
-      const s = dragTrail[i]!;
-      const dist = Math.hypot(last.x - s.x, last.y - s.y);
-      if (dist >= 6) {
-        return {
-          enterDx: (last.x - s.x) / 40,
-          enterDy: (last.y - s.y) / 40,
-        };
-      }
-    }
-    // Fallback: whole drag (legacy)
-    return {
-      enterDx: (designX - startDesign.x) / 40,
-      enterDy: (designY - startDesign.y) / 40,
-    };
-  };
 
   const onPointerDown = (e: PointerEvent) => {
     const g = api.get();
@@ -598,9 +636,8 @@ export function mountGameView(
       color: hit.color,
       id: hit.id,
     };
-    startDesign = d;
     lastDesign = d;
-    dragTrail = [{ x: d.x, y: d.y, t: performance.now() }];
+    resetDragPhase();
 
     dragEl = document.createElement('div');
     dragEl.className = 'piece piece-dragging';
@@ -639,22 +676,33 @@ export function mountGameView(
     const d = toDesign(e.clientX, e.clientY);
     if (!d) return;
     lastDesign = d;
-    placeDragEl(d.x, d.y, liftScale);
     updateProposalFromDesign(d.x, d.y);
+    const snap =
+      phaseState.phase === 'locked' && lastProposal?.kind === 'merge'
+        ? lastProposal.ghost
+        : null;
+    placeDragEl(d.x, d.y, liftScale, snap);
   };
 
   const finishDrop = (e: PointerEvent) => {
     if (!dragging) return;
     dragging = false;
     const d = toDesign(e.clientX, e.clientY) ?? lastDesign;
-    // CRITICAL: 松手只认最后一帧预览，禁止再 proposeDrop（否则 enter/抖动会改掉 T*）
+    // CRITICAL: 松手只认最后一帧预览，禁止再 proposeDrop
     const frozenProp = lastProposal;
     const cellPos =
       frozenProp?.ghost ?? rawGhostFromDesign(d.x, d.y);
-    // design delta only as fallback if frame lacks growDir
-    const { enterDx, enterDy } = recentEnter(d.x, d.y);
-    const designDx = enterDx * 40;
-    const designDy = enterDy * 40;
+    let designDx = (frozenProp?.growDirX ?? 0) * 40;
+    let designDy = (frozenProp?.growDirY ?? 0) * 40;
+    if (
+      designDx === 0 &&
+      designDy === 0 &&
+      phaseState.phase === 'locked'
+    ) {
+      designDx = d.x - phaseState.lockFingerDesign.x;
+      designDy = d.y - phaseState.lockFingerDesign.y;
+    }
+    resetDragPhase();
 
     // Snap floating piece to proposal rect, then commit frozen frame
     const t0 = performance.now();

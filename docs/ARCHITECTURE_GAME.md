@@ -23,8 +23,10 @@
 | `board.ts` | 占用、克隆、**clip 保色**、面积 |
 | `shapes.ts` | `canMergePair`、**allRectsForValue** / sizeCandidates |
 | `deal.ts` | 开局 / 过关重摆 / Debug（**关 1–8 手摆**，**9+ 五色模板**） |
-| `dropResolve.ts` | G / F / T*；摆放并进 solid 合后形；**拒绝空地放置** |
-| `merge.ts` | tryMerge、推链、生长；优先 A∪B；障碍 &lt; 2V |
+| `intent.ts` | 吸附/瞄准阈值、弱拉、扩张评分 |
+| `dragPhase.ts` | FREE/LOCKED 状态机（纯逻辑） |
+| `dropResolve.ts` | G / F / T*；两段式提案；瞄准&gt;异色&gt;空地 |
+| `merge.ts` | tryMerge、面对齐推链、前缘分层；≤2V 可推 |
 | `plan.ts` · `timeline.ts` | 步进计划与连续动画 |
 | `fill.ts` | **闭包补满**：推出后 pack 至 64；配对/合后色；防补死 |
 | `spawn.ts` | 遗留工具；合后入口 re-export `fill` |
@@ -60,7 +62,8 @@ pointerup    → dropAt(最后一帧提案)
 |------|------|
 | 同色合 | `canMergePair` |
 | 合后形自由 | `allRectsForValue` + solid union 高分 |
-| 推 &lt; 2V | `merge` 中 `value >= newValue` 挡 |
+| 推 ≤ 2V + 面对齐/分层 | `merge`：`rootsPushableByFront` · `layersFaceMatch` · 前缘平面 |
+| 两段拖合 | `dragPhase` + `view`；方向 `intent` + `dropResolve` |
 | 无搬家 | `dropResolve` 拒绝空地；`hasLegalMove` ≡ false |
 | 流放 | `colorsPresentOnBoard` → fill 色池 |
 | 关卡色 | `unlockedColorsForWave` |

@@ -1,3 +1,7 @@
+/**
+ * Merge execution + face-aligned push chains.
+ * Design: docs/DESIGN_DRAG_MERGE.md §4
+ */
 import {
   buildOccupancy,
   cellKey,
@@ -237,10 +241,218 @@ function outwardKey(p: Piece, dirX: number, dirY: number): number {
 type PushRecord = { pieceId: number; from: Rect; to: Rect };
 
 /**
- * Collect every piece that must move 1 cell together with `rootIds`
- * (sokoban chain: only pieces with value < merge newValue can be pushed;
- * equal or larger volume blocks — same number cannot push same number).
- * Returns null if a non-pushable piece blocks the path.
+ * Face of `p` that is hit when shoved in (dirX, dirY).
+ * e.g. push right → left edge cells.
+ */
+function incomingFaceCells(p: Piece, dirX: number, dirY: number): Cell[] {
+  const cells: Cell[] = [];
+  if (dirX > 0) {
+    for (let y = p.y; y < p.y + p.h; y++) cells.push({ x: p.x, y });
+  } else if (dirX < 0) {
+    for (let y = p.y; y < p.y + p.h; y++) cells.push({ x: p.x + p.w - 1, y });
+  } else if (dirY > 0) {
+    for (let x = p.x; x < p.x + p.w; x++) cells.push({ x, y: p.y });
+  } else if (dirY < 0) {
+    for (let x = p.x; x < p.x + p.w; x++) cells.push({ x, y: p.y + p.h - 1 });
+  }
+  return cells;
+}
+
+/** Leading face of `p` in the push direction (the edge that shoves). */
+function leadingFaceCells(p: Piece, dirX: number, dirY: number): Cell[] {
+  const cells: Cell[] = [];
+  if (dirX > 0) {
+    for (let y = p.y; y < p.y + p.h; y++) cells.push({ x: p.x + p.w - 1, y });
+  } else if (dirX < 0) {
+    for (let y = p.y; y < p.y + p.h; y++) cells.push({ x: p.x, y });
+  } else if (dirY > 0) {
+    for (let x = p.x; x < p.x + p.w; x++) cells.push({ x, y: p.y + p.h - 1 });
+  } else if (dirY < 0) {
+    for (let x = p.x; x < p.x + p.w; x++) cells.push({ x, y: p.y });
+  }
+  return cells;
+}
+
+/** Face cells form one continuous strip (same depth, no gaps on the cross-axis). */
+function isContinuousFace(cells: Cell[], dirX: number, dirY: number): boolean {
+  if (cells.length === 0) return false;
+  if (dirX !== 0) {
+    const x0 = cells[0]!.x;
+    if (cells.some((c) => c.x !== x0)) return false;
+    const ys = [...new Set(cells.map((c) => c.y))].sort((a, b) => a - b);
+    if (ys.length !== cells.length) return false;
+    for (let i = 1; i < ys.length; i++) {
+      if (ys[i]! !== ys[i - 1]! + 1) return false;
+    }
+    return true;
+  }
+  if (dirY !== 0) {
+    const y0 = cells[0]!.y;
+    if (cells.some((c) => c.y !== y0)) return false;
+    const xs = [...new Set(cells.map((c) => c.x))].sort((a, b) => a - b);
+    if (xs.length !== cells.length) return false;
+    for (let i = 1; i < xs.length; i++) {
+      if (xs[i]! !== xs[i - 1]! + 1) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Grow front may clear one or more roots when:
+ * - each piece's full incoming face is on the front (no partial clip),
+ * - contact on that piece is exactly its face,
+ * - union of faces is continuous (4+4 OK; gapped 3 _ 2 not),
+ * - occupied front cells == face union (growth N cells ↔ wall N cells),
+ * - each piece value ≤ newValue (equal OK; only larger blocks).
+ */
+function rootsPushableByFront(
+  board: BoardState,
+  frontCells: Cell[],
+  dirX: number,
+  dirY: number,
+  newValue: number,
+  ignoreIds: Set<number>,
+): number[] | null {
+  if (frontCells.length === 0) return [];
+
+  const frontSet = new Set(frontCells.map((c) => cellKey(c.x, c.y)));
+  const occ = buildOccupancy(board, ignoreIds);
+  const byPiece = new Map<number, Cell[]>();
+
+  for (const c of frontCells) {
+    const id = occ.get(cellKey(c.x, c.y));
+    if (id === undefined || ignoreIds.has(id)) continue;
+    let arr = byPiece.get(id);
+    if (!arr) {
+      arr = [];
+      byPiece.set(id, arr);
+    }
+    arr.push(c);
+  }
+
+  if (byPiece.size === 0) return [];
+
+  const roots: number[] = [];
+  const faceUnion: Cell[] = [];
+  const faceKeys = new Set<string>();
+
+  for (const [id, contact] of byPiece) {
+    const p = getPiece(board, id);
+    if (!p) return null;
+    if (p.value > newValue) return null;
+
+    const face = incomingFaceCells(p, dirX, dirY);
+    if (face.length === 0) return null;
+    // Full face must lie on this grow front
+    for (const fc of face) {
+      const k = cellKey(fc.x, fc.y);
+      if (!frontSet.has(k)) return null;
+      faceKeys.add(k);
+      faceUnion.push(fc);
+    }
+    // Contact on this piece must be exactly the face (no partial body hit)
+    if (contact.length !== face.length) return null;
+    for (const c of contact) {
+      if (!face.some((f) => f.x === c.x && f.y === c.y)) return null;
+    }
+    roots.push(id);
+  }
+
+  // Occupied front must equal the combined wall face (N ↔ N)
+  const occupiedKeys = new Set<string>();
+  for (const cells of byPiece.values()) {
+    for (const c of cells) occupiedKeys.add(cellKey(c.x, c.y));
+  }
+  if (occupiedKeys.size !== faceKeys.size) return null;
+  for (const k of occupiedKeys) {
+    if (!faceKeys.has(k)) return null;
+  }
+
+  // 4+4 continuous OK; gap in the wall face → not pushable
+  if (!isContinuousFace(faceUnion, dirX, dirY)) return null;
+
+  return roots;
+}
+
+/**
+ * Two layers meet flush: combined leading face of `back` (shifted 1 cell)
+ * equals combined incoming face of `front`. This is the piston rule —
+ * growth edge N can shove a mixed wall of total span N (e.g. 2+1+1 → 2+2),
+ * not piece-by-piece width equality.
+ */
+function layersFaceMatch(
+  back: Piece[],
+  front: Piece[],
+  dirX: number,
+  dirY: number,
+  newValue: number,
+): boolean {
+  if (front.length === 0) return true;
+  for (const t of front) {
+    if (t.value > newValue) return false;
+  }
+  for (const p of back) {
+    if (p.value > newValue) return false;
+  }
+
+  const expected = new Set<string>();
+  const expectedCells: Cell[] = [];
+  for (const p of back) {
+    for (const c of leadingFaceCells(p, dirX, dirY)) {
+      const k = cellKey(c.x + dirX, c.y + dirY);
+      if (!expected.has(k)) {
+        expected.add(k);
+        expectedCells.push({ x: c.x + dirX, y: c.y + dirY });
+      }
+    }
+  }
+  if (expected.size === 0) return false;
+
+  const faceKeys = new Set<string>();
+  const faceCells: Cell[] = [];
+  for (const t of front) {
+    const face = incomingFaceCells(t, dirX, dirY);
+    if (face.length === 0) return false;
+    // Whole face of each front piece must lie on the interface
+    for (const fc of face) {
+      const k = cellKey(fc.x, fc.y);
+      if (!expected.has(k)) return false;
+      if (!faceKeys.has(k)) {
+        faceKeys.add(k);
+        faceCells.push(fc);
+      }
+    }
+  }
+  if (faceKeys.size !== expected.size) return false;
+  for (const k of expected) {
+    if (!faceKeys.has(k)) return false;
+  }
+  return (
+    isContinuousFace(expectedCells, dirX, dirY) &&
+    isContinuousFace(faceCells, dirX, dirY)
+  );
+}
+
+/** Depth of the leading face along the push axis (same plane → same layer). */
+function leadingPlaneKey(p: Piece, dirX: number, dirY: number): number {
+  if (dirX > 0) return p.x + p.w - 1;
+  if (dirX < 0) return p.x;
+  if (dirY > 0) return p.y + p.h - 1;
+  if (dirY < 0) return p.y;
+  return 0;
+}
+
+/**
+ * Collect every piece that must move 1 cell with `rootIds`.
+ *
+ * Roots on one grow front may have **different thickness** (e.g. 高2 的 4
+ * beside 高4 的竖 8). Their leading faces are then on different planes, so
+ * chain matching is done **per leading plane**, not as one mixed back layer.
+ *
+ * Within one plane: combined edge span must match the next wall (piston).
+ * Only value > newValue hard-blocks.
  */
 function collectMoverIds(
   board: BoardState,
@@ -251,31 +463,73 @@ function collectMoverIds(
   ignoreIds: Set<number>,
 ): number[] | null {
   const movers = new Set<number>();
-  const stack = [...rootIds];
-  let guard = 0;
-  while (stack.length && guard++ < 64) {
-    const id = stack.pop()!;
-    if (movers.has(id) || ignoreIds.has(id)) continue;
+  for (const id of rootIds) {
     const p = getPiece(board, id);
-    if (!p) continue;
-    // Strictly larger than obstacle: equal volume cannot push equal
-    if (p.value >= newValue) return null;
+    if (!p || ignoreIds.has(id)) continue;
+    if (p.value > newValue) return null;
     movers.add(id);
+  }
+  if (movers.size === 0) return [];
 
-    const nx = p.x + dirX;
-    const ny = p.y + dirY;
-    if (fullyOffBoard(nx, ny, p.w, p.h)) continue;
-
-    // Look through current board (movers not yet moved) for anything in the way
-    const occ = buildOccupancy(board, ignoreIds);
-    for (const c of onBoardCells(nx, ny, p.w, p.h)) {
-      const oid = occ.get(cellKey(c.x, c.y));
-      if (oid === undefined || movers.has(oid) || ignoreIds.has(oid)) continue;
-      const other = getPiece(board, oid);
-      if (!other) continue;
-      if (other.value >= newValue) return null;
-      stack.push(oid);
+  let frontier = [...movers];
+  let guard = 0;
+  while (frontier.length && guard++ < 64) {
+    const backPieces: Piece[] = [];
+    for (const id of frontier) {
+      const p = getPiece(board, id);
+      if (p) backPieces.push(p);
     }
+    if (backPieces.length === 0) break;
+
+    // Group by leading-face plane (different thickness → different groups)
+    const byPlane = new Map<number, Piece[]>();
+    for (const p of backPieces) {
+      const k = leadingPlaneKey(p, dirX, dirY);
+      let arr = byPlane.get(k);
+      if (!arr) {
+        arr = [];
+        byPlane.set(k, arr);
+      }
+      arr.push(p);
+    }
+
+    const occ = buildOccupancy(board, ignoreIds);
+    const nextFrontier: number[] = [];
+    let anyAhead = false;
+
+    for (const group of byPlane.values()) {
+      const aheadIds = new Set<number>();
+      for (const p of group) {
+        const nx = p.x + dirX;
+        const ny = p.y + dirY;
+        if (fullyOffBoard(nx, ny, p.w, p.h)) continue;
+        for (const c of onBoardCells(nx, ny, p.w, p.h)) {
+          const oid = occ.get(cellKey(c.x, c.y));
+          if (oid === undefined || movers.has(oid) || ignoreIds.has(oid)) continue;
+          aheadIds.add(oid);
+        }
+      }
+      if (aheadIds.size === 0) continue;
+      anyAhead = true;
+
+      const front: Piece[] = [];
+      for (const oid of aheadIds) {
+        const other = getPiece(board, oid);
+        if (!other) return null;
+        front.push(other);
+      }
+      if (!layersFaceMatch(group, front, dirX, dirY, newValue)) return null;
+
+      for (const id of aheadIds) {
+        if (!movers.has(id)) {
+          movers.add(id);
+          nextFrontier.push(id);
+        }
+      }
+    }
+
+    if (!anyAhead) break;
+    frontier = nextFrontier;
   }
 
   return [...movers];
@@ -637,54 +891,39 @@ function tryGrowInPlace(
     const prevKeys = new Set(
       cellsOfRect(cur.x, cur.y, cur.w, cur.h).map((c) => cellKey(c.x, c.y)),
     );
-    const occ = buildOccupancy(board, ignoreIds);
-    const blockers: Piece[] = [];
-    const seen = new Set<number>();
+    const frontCells: Cell[] = [];
     for (const c of cellsOfRect(next.x, next.y, next.w, next.h)) {
-      const k = cellKey(c.x, c.y);
-      if (prevKeys.has(k)) continue;
-      const id = occ.get(k);
-      if (id === undefined || seen.has(id)) continue;
-      const p = getPiece(board, id);
-      if (!p) continue;
-      if (p.value >= newValue) return false;
-      seen.add(id);
-      blockers.push(p);
+      if (!prevKeys.has(cellKey(c.x, c.y))) frontCells.push(c);
     }
 
-    blockers.sort((a, b) => outwardKey(b, sdx, sdy) - outwardKey(a, sdx, sdy));
+    // Early face/volume check on whoever sits on this grow front
+    {
+      const early = rootsPushableByFront(
+        board,
+        frontCells,
+        sdx,
+        sdy,
+        newValue,
+        ignoreIds,
+      );
+      if (early === null) return false;
+    }
 
     const pushes: AtomicStep['pushes'] = [];
 
-    // Shove whole chain(s) 1 cell per round until grow footprint is clear.
-    // Every piece in the chain is recorded (not only the one touching B).
+    // Shove whole chain 1 cell per round until grow footprint is clear.
+    // Face-span match: N continuous front cells only move an N-span face.
     let clearSafety = 0;
     while (clearSafety++ < GRID_SIZE + 2) {
-      // Anything currently overlapping the next grow rect is a root of a push chain
-      const stillRoots: number[] = [];
-      const seenR = new Set<number>();
-      const occNow = buildOccupancy(board, ignoreIds);
-      for (const c of cellsOfRect(next.x, next.y, next.w, next.h)) {
-        if (prevKeys.has(cellKey(c.x, c.y))) continue;
-        const id = occNow.get(cellKey(c.x, c.y));
-        if (id === undefined || seenR.has(id)) continue;
-        const q = getPiece(board, id);
-        if (!q) continue;
-        if (q.value >= newValue) return false;
-        if (fullyOffBoard(q.x, q.y, q.w, q.h)) continue;
-        seenR.add(id);
-        stillRoots.push(id);
-      }
-      // Also re-check known blockers that may still overlap
-      for (const p of blockers) {
-        const q = getPiece(board, p.id);
-        if (!q || seenR.has(q.id)) continue;
-        if (pieceOverlapsRect(q, next) && !fullyOffBoard(q.x, q.y, q.w, q.h)) {
-          if (q.value >= newValue) return false;
-          seenR.add(q.id);
-          stillRoots.push(q.id);
-        }
-      }
+      const stillRoots = rootsPushableByFront(
+        board,
+        frontCells,
+        sdx,
+        sdy,
+        newValue,
+        ignoreIds,
+      );
+      if (stillRoots === null) return false;
       if (stillRoots.length === 0) break;
 
       const roundPushes = shoveChainOneCell(

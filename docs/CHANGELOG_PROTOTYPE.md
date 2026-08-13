@@ -3,12 +3,23 @@
 | 元数据 | 内容 |
 |--------|------|
 | 文档状态 | **与代码同步** |
-| 版本标签 | **原型 v0.8** |
+| 版本标签 | **原型 v0.9** |
 | 规则真源 | [GAME_RULES.md](./GAME_RULES.md) |
+| 拖合/推挤设计 | [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md) |
 | 架构 | [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) |
 | 关卡 | [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) |
 
 ---
+
+## v0.9 一览（拖合意图 × 推挤整理）
+
+| # | 主题 | 说明 | 代码 |
+|---|------|------|------|
+| 1 | **问题→设计** | 面对齐推、分层活塞、两段拖合、弱吸附、空边优先 | `docs/DESIGN_DRAG_MERGE.md` |
+| 2 | **两段式拖合** | FREE 选 B / LOCKED 定方向；瞄准&gt;异色&gt;空地 | `dragPhase` `view` `dropResolve` |
+| 3 | **弱磁吸** | 逻辑锁定 ≠ 强制重合；视觉/逻辑部分牵引 | `intent` `view` `game.dropAt` |
+| 4 | **推挤** | ≤2V 可推；生长边对齐；多块拼墙；前缘分层 | `merge.ts` |
+| 5 | **模块拆分** | `intent.ts` 阈值评分 · `dragPhase.ts` 状态机 | `src/game/*` |
 
 ## 美术方向（设计，未换皮代码）
 
