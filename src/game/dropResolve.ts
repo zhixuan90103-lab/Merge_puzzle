@@ -665,6 +665,58 @@ function mergeTargetFeasible(
   return tryMerge(full, A.id, B.id, trend, { forcedTarget: T }).ok;
 }
 
+export type PushPreviewItem = {
+  id: number;
+  rest: Rect;
+  dest: Rect;
+  off: boolean;
+};
+
+/** Final shove poses for T* preview (does not change the live board). */
+export function computePushPreview(
+  boardWithoutA: BoardState,
+  A: Piece,
+  B: Piece,
+  G: Rect,
+  T: Rect,
+  enterDx: number,
+  enterDy: number,
+): PushPreviewItem[] {
+  const full = cloneBoard(boardWithoutA);
+  if (!getPiece(full, A.id)) {
+    upsertPiece(full, { ...A, x: G.x, y: G.y });
+  }
+  if (!getPiece(full, B.id)) return [];
+  const trend = resolveMergeApproachTrend({
+    ghostA: { x: G.x, y: G.y, w: A.w, h: A.h },
+    originA: { x: A.x, y: A.y, w: A.w, h: A.h },
+    B: { x: B.x, y: B.y, w: B.w, h: B.h },
+    designDx: enterDx * 40,
+    designDy: enterDy * 40,
+  });
+  const result = tryMerge(full, A.id, B.id, trend, { forcedTarget: T });
+  if (!result.ok) return [];
+  const dest = new Map<number, Rect>();
+  for (const step of result.plan.steps) {
+    for (const mv of step.pushes) dest.set(mv.pieceId, mv.to);
+  }
+  const items: PushPreviewItem[] = [];
+  for (const p of boardWithoutA.pieces) {
+    if (p.id === B.id) continue;
+    const to = dest.get(p.id);
+    if (!to) continue;
+    if (to.x === p.x && to.y === p.y && to.w === p.w && to.h === p.h) continue;
+    const off = to.x + to.w <= 0 || to.y + to.h <= 0 || to.x >= 8 || to.y >= 8;
+    items.push({
+      id: p.id,
+      rest: { x: p.x, y: p.y, w: p.w, h: p.h },
+      dest: to,
+      off,
+    });
+  }
+  return items;
+}
+
 export function proposeDrop(
   board: BoardState,
   A: Piece,

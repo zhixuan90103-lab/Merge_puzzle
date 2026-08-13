@@ -30,7 +30,7 @@ export type TimelineCallbacks = {
 };
 
 /** Duration per logical cell (ms). Linear segments → no stop-start between cells. */
-const CELL_MS = 95;
+export const CELL_MS = 95;
 /** Soft ease across the whole merge clip (not per cell). */
 const USE_GLOBAL_EASE = true;
 
