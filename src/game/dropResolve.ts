@@ -430,6 +430,17 @@ export function findMergeShape(
   const playerAim = opts?.playerAim ?? false;
   const side = classifySide(F, B, enterDx, enterDy);
 
+  // Locked sticky: one feasibility check. Full scan is 48× tryMerge — too heavy on move.
+  const stickyT = opts?.stickyT ?? null;
+  if (stickyT && canFitMergeTarget(board, B, G, stickyT)) {
+    if (mergeTargetFeasible(board, A, B, G, stickyT, enterDx, enterDy)) {
+      const exp = expandDirs(B, stickyT);
+      const bilateral = exp.bilateralH || exp.bilateralV;
+      const { dirX, dirY } = primaryDirFromExp(exp, bilateral, side);
+      return { T: stickyT, score: 1, bilateral, dirX, dirY, uniqueWays: 1 };
+    }
+  }
+
   const shapes: { w: number; h: number }[] = [];
   const sk = new Set<string>();
   for (const o of ['h', 'v'] as Orientation[]) {
@@ -583,7 +594,6 @@ export function findMergeShape(
     else groups.set(k, [c]);
   }
   const uniqueWays = groups.size;
-  const stickyT = opts?.stickyT ?? null;
 
   if (stickyT) {
     const kept = feasible.find((c) => sameRect(c.T, stickyT));
@@ -877,17 +887,19 @@ export function proposeDrop(
 }
 
 export function hitTestPiece(
-  board: BoardState,
+  board: BoardState | { pieces: Array<Piece> },
   boardLocalX: number,
   boardLocalY: number,
   cellSize: number,
   padPx = 0,
+  skipIds?: ReadonlySet<number>,
 ): Piece | null {
   const fx = boardLocalX / cellSize;
   const fy = boardLocalY / cellSize;
   const pad = padPx / cellSize;
   let best: { p: Piece; score: number } | null = null;
   for (const p of board.pieces) {
+    if (skipIds?.has(p.id)) continue;
     const inside =
       fx >= p.x - pad &&
       fy >= p.y - pad &&

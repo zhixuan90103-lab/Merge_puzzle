@@ -14,7 +14,6 @@ import {
   isPlayable,
   isSafeToContinue,
 } from './deadlock';
-import { colorsPresentOnBoard } from './progress';
 import { allRectsForValue, shapeAxis } from './shapes';
 import type { BoardState } from './types';
 import { GRID_SIZE, MAX_COLORS } from './types';
@@ -296,53 +295,20 @@ function templatesFor(
     .map((p) => ({ w: p.w, h: p.h }));
 }
 
-/**
- * Max merge-result volume the hint color can currently produce (pair of V → 2V).
- * Used so we never grow enemy pieces to ≥ that wall.
- */
-function hintPushCeiling(board: BoardState, hintColor: number): number {
-  const ck = countKey(board);
-  let best = 0;
-  for (const [k, n] of ck) {
-    const [cs, vs] = k.split(':');
-    if (Number(cs) !== hintColor) continue;
-    const v = Number(vs);
-    if (n >= 2) best = Math.max(best, v * 2);
-    // Single can be paired by fill → allow planning one step
-    if (n >= 1) best = Math.max(best, v * 2);
-  }
-  return best;
-}
-
 function fillStep(
   board: BoardState,
   rem: number,
   hint: FillHint,
 ): { board: BoardState; ids: number[] } | null {
-  const present = colorsPresentOnBoard(board.pieces, hint.unlockedColors);
-  const hintColor = present.includes(hint.color)
-    ? hint.color
-    : (present[0] ?? 0);
-  const ceiling = Math.max(hint.value * 2, hintPushCeiling(board, hintColor), 4);
-  // Enemy pieces must stay strictly below what we can push after a merge
-  const enemyMax = Math.max(1, Math.min(2, Math.floor(ceiling / 4)));
+  // This merge's color only — do not feed other colors (stable, readable).
+  const hintColor = hint.color;
 
-  // 1) Partner **hint-color** orphans only (same shape).
-  //    NEVER partner enemy mid/large — that creates equal-volume iron gates
-  //    (e.g. green 16 vs blue 16/32 → 死局).
+  // 1) Partner **this merge color** orphans (same shape).
   const orph = orphans(board).filter((o) => o.color === hintColor);
   for (const o of orph) {
     if (o.value > rem) continue;
     let r = tryPlaceShape(board, o.value, o.color, o.w, o.h);
     if (!r) r = tryPlace(board, o.value, o.color, [{ w: o.w, h: o.h }]);
-    if (r) return { board: r.board, ids: [r.id] };
-  }
-
-  // Tiny enemy orphan only (≤ enemyMax), never grow them
-  for (const o of orphans(board)) {
-    if (o.color === hintColor) continue;
-    if (o.value > enemyMax || o.value > rem) continue;
-    const r = tryPlaceShape(board, o.value, o.color, o.w, o.h);
     if (r) return { board: r.board, ids: [r.id] };
   }
 
@@ -387,11 +353,6 @@ function fillStep(
   }
   const r1 = tryPlaceShape(board, 1, hintColor, 1, 1);
   if (r1) return { board: r1.board, ids: [r1.id] };
-  // Absolute last: if hint color can't place (shouldn't), any 1 of present
-  for (const c of present) {
-    const r = tryPlaceShape(board, 1, c, 1, 1);
-    if (r) return { board: r.board, ids: [r.id] };
-  }
   return null;
 }
 

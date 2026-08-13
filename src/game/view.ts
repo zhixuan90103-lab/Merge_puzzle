@@ -21,6 +21,7 @@ import { pieceDepthColor, pieceFillColor, pieceShadowColor, shapeAxis } from './
 import type { Piece } from './types';
 import { GRID_SIZE } from './types';
 import { createPushPreview } from './previewPush';
+import { planSpawnEnter, spawnEnterKey } from './spawnEnter';
 import { CELL_MS, type VisualPiece } from './timeline';
 
 export type BoardLayout = {
@@ -164,50 +165,32 @@ export function mountGameView(
   let lastGrowCells = 1;
 
   /**
-   * Goo overlay on top of everything. Pieces stay as-is.
-   * No mask/clip — those were eating the waist.
+   * Goo overlay. Pieces stay as-is.
+   * Filter region is the A∪B box only — full-board SVG blur is what stalled touch.
    */
-  /** Smaller than the piece radius — blur adds extra corner rounding. */
   const FUSION_RX = Math.round(PIECE_RADIUS * 0.55);
+  const GOO_BLUR = 7;
+  const GOO_PAD = 28;
   const fusionSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   fusionSvg.setAttribute('class', 'fusion-goo');
-  fusionSvg.setAttribute('width', String(boardLayout.size));
-  fusionSvg.setAttribute('height', String(boardLayout.size));
+  fusionSvg.setAttribute('overflow', 'visible');
   fusionSvg.style.cssText = `
-    position:absolute;left:0;top:0;width:100%;height:100%;
+    position:absolute;left:0;top:0;width:80px;height:80px;
     overflow:visible;pointer-events:none;z-index:9999;display:none;
   `;
   fusionSvg.innerHTML = `
     <defs>
       <filter id="piece-goo" color-interpolation-filters="sRGB"
-        filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
-        x="-80" y="-80" width="${boardLayout.size + 160}" height="${boardLayout.size + 160}">
-        <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+        filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse"
+        x="-0.35" y="-0.35" width="1.7" height="1.7">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="${GOO_BLUR}" result="blur"/>
         <feColorMatrix in="blur" type="matrix"
-          values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 54 -32" result="goo"/>
-      </filter>
-      <filter id="goo-shade" color-interpolation-filters="sRGB"
-        filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
-        x="-80" y="-80" width="${boardLayout.size + 160}" height="${boardLayout.size + 160}">
-        <feOffset in="SourceAlpha" dx="1.2" dy="3.2" result="off"/>
-        <feGaussianBlur in="off" stdDeviation="2.4" result="shBlur"/>
-        <feColorMatrix in="shBlur" type="matrix"
-          values="0 0 0 0 0.16  0 0 0 0 0.17  0 0 0 0 0.20  0 0 0 0.28 0" result="shadow"/>
-        <feMerge>
-          <feMergeNode in="shadow"/>
-          <feMergeNode in="SourceGraphic"/>
-        </feMerge>
+          values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 42 -24" result="goo"/>
       </filter>
     </defs>
-    <g filter="url(#goo-shade)">
-      <g filter="url(#piece-goo)">
-        <rect id="fusion-b-depth" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
-        <rect id="fusion-a-depth" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
-      </g>
-      <g filter="url(#piece-goo)">
-        <rect id="fusion-b-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
-        <rect id="fusion-a-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
-      </g>
+    <g filter="url(#piece-goo)">
+      <rect id="fusion-b-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
+      <rect id="fusion-a-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
     </g>
   `;
   boardInner.appendChild(fusionSvg);
@@ -264,8 +247,7 @@ export function mountGameView(
 
   const fusionABlob = fusionSvg.querySelector('#fusion-a-blob') as SVGRectElement;
   const fusionBBlob = fusionSvg.querySelector('#fusion-b-blob') as SVGRectElement;
-  const fusionADepth = fusionSvg.querySelector('#fusion-a-depth') as SVGRectElement;
-  const fusionBDepth = fusionSvg.querySelector('#fusion-b-depth') as SVGRectElement;
+  let fusionHostKey = '';
 
   const setSvgRect = (
     el: SVGRectElement,
@@ -275,10 +257,15 @@ export function mountGameView(
     h: number,
     fill: string,
   ) => {
+    const ww = Math.max(0, w);
+    const hh = Math.max(0, h);
+    const key = `${x}|${y}|${ww}|${hh}|${fill}`;
+    if (el.dataset.box === key) return;
+    el.dataset.box = key;
     el.setAttribute('x', String(x));
     el.setAttribute('y', String(y));
-    el.setAttribute('width', String(Math.max(0, w)));
-    el.setAttribute('height', String(Math.max(0, h)));
+    el.setAttribute('width', String(ww));
+    el.setAttribute('height', String(hh));
     el.setAttribute('fill', fill);
   };
 
@@ -351,6 +338,7 @@ export function mountGameView(
     fusionNumRaf = 0;
     fusionSvg.style.display = 'none';
     fusionDecor.style.display = 'none';
+    fusionHostKey = '';
   };
 
   const paintFusion = (
@@ -364,7 +352,6 @@ export function mountGameView(
     aScale: number,
   ) => {
     const fill = pieceFillColor(color, value);
-    const depth = pieceDepthColor(color, value);
     const bLeft = B.x * cell + CELL_INSET;
     const bTop = B.y * cell + CELL_INSET;
     const bW = B.w * cell - CELL_INSET * 2;
@@ -374,10 +361,30 @@ export function mountGameView(
     const ax = aLeft + aW / 2 - aw / 2;
     const ay = aTop + aH / 2 - ah / 2;
     const grow = 3;
-    setSvgRect(fusionBDepth, bLeft - grow + 1, bTop - grow + 3, bW + grow * 2, bH + grow * 2 + 2, depth);
-    setSvgRect(fusionADepth, ax - grow + 1, ay - grow + 3, aw + grow * 2, ah + grow * 2 + 2, depth);
-    setSvgRect(fusionBBlob, bLeft - grow, bTop - grow, bW + grow * 2, bH + grow * 2, fill);
-    setSvgRect(fusionABlob, ax - grow, ay - grow, aw + grow * 2, ah + grow * 2, fill);
+    const ax0 = ax - grow;
+    const ay0 = ay - grow;
+    const aw0 = aw + grow * 2;
+    const ah0 = ah + grow * 2;
+    const bx0 = bLeft - grow;
+    const by0 = bTop - grow;
+    const bw0 = bW + grow * 2;
+    const bh0 = bH + grow * 2;
+    const snap16 = (v: number) => Math.floor(v / 16) * 16;
+    const hostX = snap16(Math.min(ax0, bx0) - GOO_PAD);
+    const hostY = snap16(Math.min(ay0, by0) - GOO_PAD);
+    const hostW = snap16(Math.max(ax0 + aw0, bx0 + bw0) - hostX + GOO_PAD + 16) + 16;
+    const hostH = snap16(Math.max(ay0 + ah0, by0 + bh0) - hostY + GOO_PAD + 16) + 16;
+    const hostKey = `${hostX | 0},${hostY | 0},${hostW | 0},${hostH | 0}`;
+    if (hostKey !== fusionHostKey) {
+      fusionHostKey = hostKey;
+      fusionSvg.style.left = `${hostX}px`;
+      fusionSvg.style.top = `${hostY}px`;
+      fusionSvg.style.width = `${hostW}px`;
+      fusionSvg.style.height = `${hostH}px`;
+      fusionSvg.setAttribute('viewBox', `0 0 ${hostW} ${hostH}`);
+    }
+    setSvgRect(fusionBBlob, bx0 - hostX, by0 - hostY, bw0, bh0, fill);
+    setSvgRect(fusionABlob, ax0 - hostX, ay0 - hostY, aw0, ah0, fill);
 
     placeBox(fusionShineA, ax, ay, aw, ah);
     fusionShineA.style.setProperty(
@@ -442,6 +449,35 @@ export function mountGameView(
   const statusEl = header.querySelector('#game-status') as HTMLElement;
   const hintEl = panel.querySelector('#game-hint') as HTMLElement;
   const pieceEls = new Map<number, HTMLElement>();
+  const piecePool: HTMLElement[] = [];
+  const spawning = new Set<number>();
+  let spawnSlideRaf = 0;
+  let lastSpawnAnimKey = '';
+
+  const makePieceEl = () => {
+    const el = document.createElement('div');
+    el.className = 'piece';
+    el.style.cssText =
+      `position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:${PIECE_RADIUS}px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:rgba(107,101,120,0.62);box-sizing:border-box;`;
+    return el;
+  };
+
+  const acquirePieceEl = () => {
+    const el = piecePool.pop() ?? makePieceEl();
+    el.style.display = 'flex';
+    el.className = 'piece';
+    return el;
+  };
+
+  const releasePieceEl = (el: HTMLElement) => {
+    el.classList.remove('piece-reject', 'piece-spawn');
+    el.style.display = 'none';
+    el.style.transform = '';
+    el.style.opacity = '1';
+    el.dataset.label = '';
+    el.dataset.mode = '';
+    piecePool.push(el);
+  };
   const push = createPushPreview({
     cell,
     inset: CELL_INSET,
@@ -481,16 +517,20 @@ export function mountGameView(
 
     // Same left/top as idle — switching to translate3d on commit twitches the board.
     if (opts.motionOnly) {
-      const left = p.x * cell + CELL_INSET;
-      const top = p.y * cell + CELL_INSET;
-      const pw = p.w * cell - CELL_INSET * 2;
-      const ph = p.h * cell - CELL_INSET * 2;
-      el.style.left = `${left}px`;
-      el.style.top = `${top}px`;
-      el.style.width = `${pw}px`;
-      el.style.height = `${ph}px`;
-      el.style.transform = sc !== 1 ? `scale(${sc})` : '';
-      el.style.opacity = String(p.opacity ?? 1);
+      if (!spawning.has(p.id)) {
+        const left = p.x * cell + CELL_INSET;
+        const top = p.y * cell + CELL_INSET;
+        const pw = p.w * cell - CELL_INSET * 2;
+        const ph = p.h * cell - CELL_INSET * 2;
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
+        el.style.width = `${pw}px`;
+        el.style.height = `${ph}px`;
+      }
+      if (!spawning.has(p.id)) {
+        el.style.transform = sc !== 1 ? `scale(${sc})` : '';
+        el.style.opacity = String(p.opacity ?? 1);
+      }
       // No float/lift for pushed pieces — same plane as board (can be shoved under grow)
       const mode = isGrowing ? 'g' : 'n';
       if (el.dataset.mode !== mode) {
@@ -524,11 +564,13 @@ export function mountGameView(
       return;
     }
 
-    el.style.left = `${p.x * cell + CELL_INSET}px`;
-    el.style.top = `${p.y * cell + CELL_INSET}px`;
-    el.style.width = `${p.w * cell - CELL_INSET * 2}px`;
-    el.style.height = `${p.h * cell - CELL_INSET * 2}px`;
-    el.style.transform = sc !== 1 ? `scale(${sc})` : '';
+    if (!spawning.has(p.id)) {
+      el.style.left = `${p.x * cell + CELL_INSET}px`;
+      el.style.top = `${p.y * cell + CELL_INSET}px`;
+      el.style.width = `${p.w * cell - CELL_INSET * 2}px`;
+      el.style.height = `${p.h * cell - CELL_INSET * 2}px`;
+      el.style.transform = sc !== 1 ? `scale(${sc})` : '';
+    }
     el.style.transformOrigin = 'center center';
     {
       const col =
@@ -544,7 +586,9 @@ export function mountGameView(
     el.style.fontWeight = '800';
     el.style.fontSize = `${Math.max(12, Math.min(22, cell * 0.4))}px`;
     el.style.color = 'rgba(107,101,120,0.62)';
-    el.style.opacity = String(p.opacity ?? 1);
+    if (!spawning.has(p.id)) {
+      el.style.opacity = String(p.opacity ?? 1);
+    }
     el.style.boxSizing = 'border-box';
     el.style.transition = 'none';
     el.style.willChange = 'transform, width, height, opacity';
@@ -589,7 +633,9 @@ export function mountGameView(
     else if (debugUi && axis === 'v') el.style.outline = '2px solid rgba(255,213,74,0.82)';
     else el.style.outline = 'none';
 
-    el.classList.toggle('piece-spawn', !!opts.flash);
+    if (!spawning.has(p.id)) {
+      el.classList.remove('piece-spawn');
+    }
   };
 
   const syncPieces = (
@@ -597,28 +643,24 @@ export function mountGameView(
     flashIds: number[],
     motionOnly: boolean,
   ) => {
-    const flash = new Set(flashIds);
+    void flashIds;
     const live = new Set(list.map((p) => p.id));
     const hold = push.holdIds();
     for (const [id, el] of pieceEls) {
       if (!live.has(id)) {
         if (hold?.has(id)) continue;
-        el.remove();
+        releasePieceEl(el);
         pieceEls.delete(id);
       }
     }
     for (const p of list) {
       let el = pieceEls.get(p.id);
       if (!el) {
-        el = document.createElement('div');
-        el.className = 'piece';
-        el.style.cssText =
-          `position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:${PIECE_RADIUS}px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:rgba(107,101,120,0.62);box-sizing:border-box;`;
+        el = acquirePieceEl();
         piecesLayer.appendChild(el);
         pieceEls.set(p.id, el);
         // first paint full
         paintPiece(el, p, {
-          flash: flash.has(p.id),
           pushed: (p as VisualPiece).pushed,
           growing: (p as VisualPiece).growing,
           motionOnly: false,
@@ -628,7 +670,6 @@ export function mountGameView(
       if (hold?.has(p.id)) continue;
       const vp = p as VisualPiece;
       paintPiece(el, p, {
-        flash: !motionOnly && flash.has(p.id),
         pushed: vp.pushed,
         growing: vp.growing,
         motionOnly,
@@ -638,6 +679,75 @@ export function mountGameView(
 
   let lastStatusKey = '';
   let lastRejectNonce = -1;
+
+  const playSpawnSlide = (g: GameModel) => {
+    const ids = g.spawnFlashIds;
+    if (ids.length === 0) {
+      lastSpawnAnimKey = '';
+      return;
+    }
+    const key = spawnEnterKey(ids, g.spawnFromDx, g.spawnFromDy);
+    if (key === lastSpawnAnimKey) return;
+    lastSpawnAnimKey = key;
+    if (spawnSlideRaf) cancelAnimationFrame(spawnSlideRaf);
+
+    const plan = planSpawnEnter(
+      g.board.pieces,
+      ids,
+      g.spawnFromDx,
+      g.spawnFromDy,
+    );
+    const live = plan.items
+      .map((it) => {
+        const el = pieceEls.get(it.id);
+        return el ? { it, el } : null;
+      })
+      .filter((x): x is { it: (typeof plan.items)[0]; el: HTMLElement } => !!x);
+
+    const easeOut = (t: number) => {
+      const u = 1 - Math.min(1, Math.max(0, t));
+      return 1 - u * u * u;
+    };
+
+    const plant = (
+      it: (typeof plan.items)[0],
+      el: HTMLElement,
+      k: number,
+    ) => {
+      const x = it.fromX + (it.toX - it.fromX) * k;
+      const y = it.fromY + (it.toY - it.fromY) * k;
+      el.style.left = `${x * cell + CELL_INSET}px`;
+      el.style.top = `${y * cell + CELL_INSET}px`;
+      el.style.width = `${it.w * cell - CELL_INSET * 2}px`;
+      el.style.height = `${it.h * cell - CELL_INSET * 2}px`;
+      el.style.transform = '';
+      el.style.opacity = String(0.62 + 0.38 * k);
+      el.style.zIndex = String(it.z);
+    };
+
+    const t0 = performance.now();
+    for (const row of live) {
+      spawning.add(row.it.id);
+      plant(row.it, row.el, 0);
+    }
+
+    const tick = (now: number) => {
+      spawnSlideRaf = 0;
+      const k = easeOut((now - t0) / plan.duration);
+      const u = Math.max(0, Math.min(1, k));
+      for (const row of live) plant(row.it, row.el, u);
+      if (u < 1) {
+        spawnSlideRaf = requestAnimationFrame(tick);
+        return;
+      }
+      for (const row of live) {
+        plant(row.it, row.el, 1);
+        row.el.style.opacity = '1';
+        spawning.delete(row.it.id);
+      }
+    };
+    spawnSlideRaf = requestAnimationFrame(tick);
+  };
 
   const playRejectBlink = (ids: number[]) => {
     const want = new Set(ids);
@@ -657,10 +767,20 @@ export function mountGameView(
     // Keep left/top (not transform) during merge — switching to
     // translate3d for one clip makes the whole board twitch.
     const motionOnly = !!(g.visualPieces && g.animating);
+    if (!g.animating && g.spawnFlashIds.length) {
+      const peek = `${g.spawnFlashIds.join(',')}|${g.spawnFromDx},${g.spawnFromDy}`;
+      if (peek !== lastSpawnAnimKey) {
+        for (const id of g.spawnFlashIds) spawning.add(id);
+      }
+    }
     if (g.visualPieces) {
       syncPieces(g.visualPieces, g.spawnFlashIds, motionOnly);
     } else {
       syncPieces(g.board.pieces, g.spawnFlashIds, false);
+    }
+    if (!g.animating) playSpawnSlide(g);
+    if (!g.lifted && dragEl && !dragging) {
+      dragEl.style.display = 'none';
     }
     // Unhide before blink — animation on display:none is skipped
     if (g.lifted) {
@@ -697,6 +817,9 @@ export function mountGameView(
     }
   };
 
+  let dragging = false;
+  let dragEl: HTMLElement | null = null;
+
   const unsub = api.subscribe(render);
 
   panel.querySelector('#btn-restart')!.addEventListener('click', () => {
@@ -710,8 +833,6 @@ export function mountGameView(
   });
 
   // ——— Drag: hit-test lift · continuous proposal · commit same rules ———
-  let dragging = false;
-  let dragEl: HTMLElement | null = null;
   let pieceStart = { x: 0, y: 0, w: 1, h: 1, value: 1, color: 0, id: 0 };
   let liftScale = 1;
   let liftRaf = 0;
@@ -721,14 +842,14 @@ export function mountGameView(
   /** Finger offset so block sits above touch (design px). FINDINGS 12–20 */
   const FINGER_OFFSET_Y = 16;
 
+  const designScratch = { x: 0, y: 0 };
   const toDesign = (clientX: number, clientY: number) => {
     const layout = getStageLayout();
     if (!layout) return null;
     const stageRect = stage.getBoundingClientRect();
-    return {
-      x: (clientX - stageRect.left) / layout.scale,
-      y: (clientY - stageRect.top) / layout.scale,
-    };
+    designScratch.x = (clientX - stageRect.left) / layout.scale;
+    designScratch.y = (clientY - stageRect.top) / layout.scale;
+    return designScratch;
   };
 
   /** Aim point in board-local pixels. */
@@ -742,8 +863,11 @@ export function mountGameView(
     return aimToGhost(a.x, a.y, cell, pieceStart.w, pieceStart.h);
   };
 
+  let lastPropPaintKey = '';
+
   const paintProposal = (prop: DropProposal | null, _A: { w: number; h: number }) => {
     if (!prop) {
+      lastPropPaintKey = '';
       proposalEl.style.display = 'none';
       targetRingEl.style.display = 'none';
       mergeShapeEl.style.display = 'none';
@@ -751,6 +875,10 @@ export function mountGameView(
       push.back();
       return;
     }
+    const T = prop.mergeTarget;
+    const paintKey = `${prop.kind}|${prop.targetId}|${prop.ghost.x},${prop.ghost.y}|${T ? `${T.x},${T.y},${T.w},${T.h}` : ''}|${prop.growDirX ?? 0},${prop.growDirY ?? 0}|${prop.locked ? 1 : 0}`;
+    if (paintKey === lastPropPaintKey) return;
+    lastPropPaintKey = paintKey;
     proposalEl.style.display = 'none';
 
     if (prop.kind === 'merge' && prop.targetId != null) {
@@ -1030,13 +1158,14 @@ export function mountGameView(
     const aH = pieceStart.h * cell - CELL_INSET * 2;
     const left = a.x - (pieceStart.w * cell) / 2;
     const top = a.y - (pieceStart.h * cell) / 2;
-    dragEl.style.left = `${left}px`;
-    dragEl.style.top = `${top}px`;
+    lastDragLeft = left;
+    lastDragTop = top;
+    dragEl.style.left = '0';
+    dragEl.style.top = '0';
     dragEl.style.width = `${aW}px`;
     dragEl.style.height = `${aH}px`;
-    dragEl.style.transform = `scale(${scale})`;
-    dragEl.style.boxShadow =
-      '0 16px 28px rgba(var(--piece-shadow),0.26), 0 0 0 1px rgba(255,255,255,0.32)';
+    dragEl.style.transform = `translate3d(${left}px,${top}px,0) scale(${scale})`;
+    dragEl.style.transformOrigin = 'center center';
 
     const canFuse = phaseState.phase === 'locked' && phaseState.lockB != null;
     if (canFuse && phaseState.lockB) {
@@ -1071,12 +1200,15 @@ export function mountGameView(
   };
 
   let lastDesign = { x: 0, y: 0 };
+  let lastDragLeft = 0;
+  let lastDragTop = 0;
   let liftDesign = { x: 0, y: 0 };
   let pointerId = -1;
+  let dragMoveRaf = 0;
 
   const onPointerDown = (e: PointerEvent) => {
     const g = api.get();
-    if (g.status === 'dead' || g.animating || g.lifted) return;
+    if (g.status === 'dead' || g.lifted) return;
 
     const d = toDesign(e.clientX, e.clientY);
     if (!d) return;
@@ -1091,7 +1223,17 @@ export function mountGameView(
     ) {
       return;
     }
-    const hit = hitTestPiece(g.board, localX, localY, cell, 8);
+    const skip = new Set(g.busyIds);
+    const hitVis = hitTestPiece(
+      g.visualPieces ? { pieces: g.visualPieces } : g.board,
+      localX,
+      localY,
+      cell,
+      8,
+      skip,
+    );
+    if (!hitVis) return;
+    const hit = g.board.pieces.find((p) => p.id === hitVis.id);
     if (!hit) return;
 
     if (!api.beginLift(hit.id)) return;
@@ -1107,19 +1249,25 @@ export function mountGameView(
       color: hit.color,
       id: hit.id,
     };
-    lastDesign = d;
-    liftDesign = d;
+    lastDesign = { x: d.x, y: d.y };
+    liftDesign = { x: d.x, y: d.y };
     resetDragPhase();
 
-    dragEl = document.createElement('div');
-    dragEl.className = 'piece piece-dragging';
-    dragEl.style.cssText = `
-      position:absolute; pointer-events:none; z-index:3000;
-      border-radius:${PIECE_RADIUS}px; display:flex; flex-direction:column;
-      align-items:center; justify-content:center;
-      font-weight:800; color:#0f172a; box-sizing:border-box;
-      will-change:left,top,transform;
-    `;
+    if (!dragEl) {
+      dragEl = document.createElement('div');
+      dragEl.className = 'piece piece-dragging';
+      dragEl.style.cssText = `
+        position:absolute; pointer-events:none; z-index:3000;
+        border-radius:${PIECE_RADIUS}px; display:flex; flex-direction:column;
+        align-items:center; justify-content:center;
+        font-weight:800; color:#0f172a; box-sizing:border-box;
+        will-change:transform;
+      `;
+      dragLayer.appendChild(dragEl);
+    }
+    dragEl.style.display = 'flex';
+    dragEl.style.boxShadow =
+      '0 16px 28px rgba(var(--piece-shadow),0.26), 0 0 0 1px rgba(255,255,255,0.32)';
     paintPiece(
       dragEl,
       {
@@ -1133,7 +1281,6 @@ export function mountGameView(
       },
       { lifting: true, scale: 1 },
     );
-    dragLayer.appendChild(dragEl);
     liftScale = 1;
     placeDragEl(d.x, d.y, 1);
     updateProposalFromDesign(d.x, d.y);
@@ -1143,11 +1290,10 @@ export function mountGameView(
     e.preventDefault();
   };
 
-  const onPointerMove = (e: PointerEvent) => {
+  const flushDragMove = () => {
+    dragMoveRaf = 0;
     if (!dragging || !dragEl) return;
-    const d = toDesign(e.clientX, e.clientY);
-    if (!d) return;
-    lastDesign = d;
+    const d = lastDesign;
     updateProposalFromDesign(d.x, d.y);
     const snap =
       phaseState.phase === 'locked' && lastProposal?.kind === 'merge'
@@ -1156,10 +1302,28 @@ export function mountGameView(
     placeDragEl(d.x, d.y, liftScale, snap);
   };
 
+  const onPointerMove = (e: PointerEvent) => {
+    if (!dragging || !dragEl) return;
+    const d = toDesign(e.clientX, e.clientY);
+    if (!d) return;
+    lastDesign.x = d.x;
+    lastDesign.y = d.y;
+    if (!dragMoveRaf) dragMoveRaf = requestAnimationFrame(flushDragMove);
+  };
+
   const finishDrop = (e: PointerEvent) => {
     if (!dragging) return;
     dragging = false;
-    const d = toDesign(e.clientX, e.clientY) ?? lastDesign;
+    if (dragMoveRaf) {
+      cancelAnimationFrame(dragMoveRaf);
+      dragMoveRaf = 0;
+    }
+    const raw = toDesign(e.clientX, e.clientY);
+    if (raw) {
+      lastDesign.x = raw.x;
+      lastDesign.y = raw.y;
+    }
+    const d = lastDesign;
     // CRITICAL: 松手只认最后一帧预览，禁止再 proposeDrop
     const frozenProp = lastProposal;
     const illegalHome =
@@ -1186,12 +1350,8 @@ export function mountGameView(
     // Snap floating piece to proposal rect, then commit frozen frame
     const t0 = performance.now();
     const startScale = liftScale;
-    const fromLeft = dragEl
-      ? parseFloat(dragEl.style.left) || 0
-      : cellPos.x * cell;
-    const fromTop = dragEl
-      ? parseFloat(dragEl.style.top) || 0
-      : cellPos.y * cell;
+    const fromLeft = dragEl ? lastDragLeft : cellPos.x * cell;
+    const fromTop = dragEl ? lastDragTop : cellPos.y * cell;
     const toLeft = cellPos.x * cell + 2;
     const toTop = cellPos.y * cell + 2;
 
@@ -1200,21 +1360,27 @@ export function mountGameView(
       const ease = 1 - (1 - u) * (1 - u);
       liftScale = startScale + (1 - startScale) * ease;
       if (dragEl) {
-        dragEl.style.left = `${fromLeft + (toLeft - fromLeft) * ease}px`;
-        dragEl.style.top = `${fromTop + (toTop - fromTop) * ease}px`;
-        dragEl.style.transform = `scale(${liftScale})`;
+        const x = fromLeft + (toLeft - fromLeft) * ease;
+        const y = fromTop + (toTop - fromTop) * ease;
+        dragEl.style.left = '0';
+        dragEl.style.top = '0';
+        dragEl.style.transform = `translate3d(${x}px,${y}px,0) scale(${liftScale})`;
       }
       if (u < 1) {
         dropSnapRaf = requestAnimationFrame(tick);
         return;
       }
-      dragEl?.remove();
-      dragEl = null;
+      lastProposal = null;
+      api.dropAt(cellPos, designDx, designDy, frozenProp);
+      const stillHeld = !!api.get().lifted;
+      if (stillHeld && dragEl) {
+        // Queued behind in-flight grow — keep parked clone until commit.
+        dragEl.style.display = 'flex';
+      } else if (dragEl) {
+        dragEl.style.display = 'none';
+      }
       paintProposal(null, pieceStart);
       mergeShapeEl.style.display = 'none';
-      lastProposal = null;
-      // Commit the frozen preview frame only (not a recomputed one)
-      api.dropAt(cellPos, designDx, designDy, frozenProp);
       if (push.pendingCommit && !api.get().animating) {
         push.setPendingCommit(false);
         push.back();
@@ -1245,6 +1411,8 @@ export function mountGameView(
       unsub();
       cancelAnimationFrame(liftRaf);
       cancelAnimationFrame(dropSnapRaf);
+      if (dragMoveRaf) cancelAnimationFrame(dragMoveRaf);
+      if (spawnSlideRaf) cancelAnimationFrame(spawnSlideRaf);
       stopTStarAnim();
       push.destroy();
       boardRoot.remove();

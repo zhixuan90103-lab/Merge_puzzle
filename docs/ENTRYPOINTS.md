@@ -26,7 +26,7 @@ index.html
        → createGame + mountGameView(#stage, #ui-root)
 ```
 
-玩法规则见 [GAME_RULES.md](./GAME_RULES.md) **v0.8**。
+玩法规则见 [GAME_RULES.md](./GAME_RULES.md) **v0.9**。预览手感见 [DESIGN_PREVIEW.md](./DESIGN_PREVIEW.md)。
 
 ## 3. DOM
 

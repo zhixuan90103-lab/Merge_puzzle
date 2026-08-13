@@ -33,6 +33,14 @@ const lerpRect = (a: Rect, b: Rect, t: number): Rect => ({
   h: a.h + (b.h - a.h) * t,
 });
 
+const lerpInto = (out: Rect, a: Rect, b: Rect, t: number): Rect => {
+  out.x = a.x + (b.x - a.x) * t;
+  out.y = a.y + (b.y - a.y) * t;
+  out.w = a.w + (b.w - a.w) * t;
+  out.h = a.h + (b.h - a.h) * t;
+  return out;
+};
+
 export function stillOnBoard(r: Rect): boolean {
   return r.x < 8 && r.x + r.w > 0 && r.y < 8 && r.y + r.h > 0;
 }
@@ -111,6 +119,8 @@ export function createPushPreview(host: PushPreviewHost) {
   let fly = false;
   let pendingCommit = false;
   const pinned = new Map<number, Rect>();
+  const holdCache = new Set<number>();
+  const lerpScratch: Rect = { x: 0, y: 0, w: 1, h: 1 };
 
   const plant = (item: PushPrev, at: Rect, opacity: number) => {
     const el = pieceEls.get(item.id);
@@ -128,11 +138,12 @@ export function createPushPreview(host: PushPreviewHost) {
       const el = pieceEls.get(item.id);
       if (!el) continue;
       if (fly && item.flyFrom && item.flyTo) {
-        const r = lerpRect(item.flyFrom, item.flyTo, uu);
-        plant(item, r, (item.startOp ?? 0.7) * (1 - Math.min(1, uu / 0.78)));
+        lerpInto(lerpScratch, item.flyFrom, item.flyTo, uu);
+        plant(item, lerpScratch, (item.startOp ?? 0.7) * (1 - Math.min(1, uu / 0.78)));
         continue;
       }
-      plant(item, lerpRect(item.rest, item.dest, uu), solid ? 1 : opacityForRect(lerpRect(item.rest, item.dest, uu)));
+      lerpInto(lerpScratch, item.rest, item.dest, uu);
+      plant(item, lerpScratch, solid ? 1 : opacityForRect(lerpScratch));
     }
   };
 
@@ -191,7 +202,10 @@ export function createPushPreview(host: PushPreviewHost) {
     },
     holdIds(): Set<number> | null {
       if (!fly && !pendingCommit && pinned.size === 0) return null;
-      return new Set([...items.map((it) => it.id), ...pinned.keys()]);
+      holdCache.clear();
+      for (const it of items) holdCache.add(it.id);
+      for (const id of pinned.keys()) holdCache.add(id);
+      return holdCache;
     },
     toward(next: PushPrev[], nextKey: string, startAt?: number, duration?: number) {
       if (nextKey === key && toU === 1) return;

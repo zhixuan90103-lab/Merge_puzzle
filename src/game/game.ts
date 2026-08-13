@@ -1,8 +1,9 @@
-import { cloneBoard, getPiece } from './board';
+import { cloneBoard, getPiece, removePiece, upsertPiece } from './board';
 import { dealAfterClear, dealDebugNear64, dealOpening } from './deal';
 import { isDeadlock, isForcedLoss, isPlayable, isSafeToContinue } from './deadlock';
 import { proposeDrop, type DropProposal } from './dropResolve';
 import { tryMerge, trendFromApproachDelta } from './merge';
+import type { MergePlan } from './plan';
 import { sizeForValue } from './shapes';
 import { trySpawnAfterMerge } from './spawn';
 import { playMergePlan, type VisualPiece } from './timeline';
@@ -24,11 +25,16 @@ export type GameModel = {
   spawnFlashIds: number[];
   /** Piece ids to blink after an illegal drop returns home. */
   rejectFlashIds: number[];
+  /** Push/grow dir of the clip that just settled — fill slides in from this side. */
+  spawnFromDx: number;
+  spawnFromDy: number;
   /** Bumps every bounce so the same piece can blink again. */
   rejectNonce: number;
   animating: boolean;
   /** When set, view renders these instead of board.pieces (timeline) */
   visualPieces: VisualPiece[] | null;
+  /** Growing / being shoved this clip — cannot lift. */
+  busyIds: number[];
 };
 
 export type GameListener = (g: GameModel) => void;
@@ -60,9 +66,38 @@ export function createGame() {
     lastSpawn: false,
     spawnFlashIds: [],
     rejectFlashIds: [],
+    spawnFromDx: 0,
+    spawnFromDy: 0,
     rejectNonce: 0,
     animating: false,
     visualPieces: null,
+    busyIds: [],
+  };
+
+  type PendingDrop = {
+    ghost: { x: number; y: number };
+    designDx: number;
+    designDy: number;
+    frame: DropProposal | null;
+  };
+  let pendingDrop: PendingDrop | null = null;
+
+  const busyFromPlan = (plan: MergePlan): number[] => {
+    const ids = new Set<number>([plan.anchorId]);
+    for (const step of plan.steps) {
+      ids.add(step.grow.pieceId);
+      for (const mv of step.pushes) ids.add(mv.pieceId);
+    }
+    return [...ids];
+  };
+
+  const reserveLiftHome = (board: BoardState, lifted: Piece): BoardState => {
+    const next = cloneBoard(board);
+    upsertPiece(next, {
+      ...lifted,
+      id: -1,
+    });
+    return next;
   };
   const listeners = new Set<GameListener>();
   let cancelAnim: (() => void) | null = null;
@@ -86,6 +121,7 @@ export function createGame() {
         spawnFlashIds: [],
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
     } else {
       set({
@@ -96,6 +132,7 @@ export function createGame() {
         spawnFlashIds: [],
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
     }
   };
@@ -110,7 +147,7 @@ export function createGame() {
       spawnFlashIds: [],
       rejectFlashIds: [A.id],
       rejectNonce: model.rejectNonce + 1,
-      visualPieces: null,
+      visualPieces: model.animating ? model.visualPieces : null,
     });
   };
 
@@ -120,14 +157,36 @@ export function createGame() {
    * 2) Cheap spawn (isPlayable only)
    * 3) Full isDeadlock **only** if not playable — rare terminal confirm
    */
+  const slideDirFromPlan = (plan: MergePlan): { dx: number; dy: number } => {
+    for (const step of plan.steps) {
+      const g = step.grow;
+      if (g.to.x < g.from.x) return { dx: -1, dy: 0 };
+      if (g.to.x + g.to.w > g.from.x + g.from.w) return { dx: 1, dy: 0 };
+      if (g.to.y < g.from.y) return { dx: 0, dy: -1 };
+      if (g.to.y + g.to.h > g.from.y + g.from.h) return { dx: 0, dy: 1 };
+    }
+    for (const step of plan.steps) {
+      for (const mv of step.pushes) {
+        const sx = Math.sign(mv.to.x - mv.from.x);
+        const sy = Math.sign(mv.to.y - mv.from.y);
+        if (sx || sy) return { dx: sx, dy: sy };
+      }
+    }
+    return { dx: 0, dy: 1 };
+  };
+
   const afterMerge = (
     board: BoardState,
     createdValue: number,
     piecesBefore: number,
     mergeColor = 0,
+    slideDir?: { dx: number; dy: number },
   ) => {
+    const keepLift = model.lifted;
+    const pend = pendingDrop;
+
     if (createdValue === 64) {
-      // Full screen clear → next wave; color count follows wave schedule (not +1 always).
+      pendingDrop = null;
       const wave = model.wave + 1;
       const unlocked = unlockedColorsForWave(wave);
       const next = dealAfterClear(unlocked, wave);
@@ -145,28 +204,38 @@ export function createGame() {
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
+        spawnFromDx: 0,
+        spawnFromDy: 0,
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
       return;
     }
 
-    // Closed board: only refill cells freed by push/clip; pack to 64
-    // Prefer the color just merged so we don't feed enemy equal-volume walls.
+    const fillSrc = keepLift ? reserveLiftHome(board, keepLift) : board;
     const spawn = trySpawnAfterMerge(
-      board,
+      fillSrc,
       model.unlockedColors,
       model.wave,
       piecesBefore,
       { color: mergeColor, value: createdValue },
     );
-    const spawned = spawn.spawnedIds.length > 0;
+    if (getPiece(spawn.board, -1)) removePiece(spawn.board, -1);
+    const spawned = spawn.spawnedIds.filter((id) => id !== -1).length > 0;
     const note = `合并 → ${createdValue} · ${spawn.label}`;
 
-    // Terminal: no pairs, or only one-move death (32+32→64 counts as live win path)
-    const forced = isForcedLoss(spawn.board);
-    const dead = !isPlayable(spawn.board) || forced || isDeadlock(spawn.board);
+    const live = keepLift
+      ? (() => {
+          const b = cloneBoard(spawn.board);
+          upsertPiece(b, { ...keepLift });
+          return b;
+        })()
+      : spawn.board;
+    const forced = isForcedLoss(live);
+    const dead = !isPlayable(live) || forced || isDeadlock(live);
     if (dead) {
+      pendingDrop = null;
       set({
         board: spawn.board,
         status: 'dead',
@@ -175,9 +244,12 @@ export function createGame() {
           : `${note} · 无法再合并，点重开`,
         lifted: null,
         lastSpawn: spawned,
-        spawnFlashIds: spawn.spawnedIds,
+        spawnFlashIds: spawn.spawnedIds.filter((id) => id !== -1),
+        spawnFromDx: slideDir?.dx ?? 0,
+        spawnFromDy: slideDir?.dy ?? 1,
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
       return;
     }
@@ -188,13 +260,162 @@ export function createGame() {
       message: isSafeToContinue(spawn.board)
         ? note
         : `${note} · 局面危险`,
-      lifted: null,
+      lifted: keepLift,
       lastSpawn: spawned,
-      spawnFlashIds: spawn.spawnedIds,
+      spawnFlashIds: spawn.spawnedIds.filter((id) => id !== -1),
+      spawnFromDx: slideDir?.dx ?? 0,
+      spawnFromDy: slideDir?.dy ?? 1,
       animating: false,
       visualPieces: null,
+      busyIds: [],
     });
+
+    if (pend && keepLift) {
+      pendingDrop = null;
+      commitLiftedDrop(pend.ghost, pend.designDx, pend.designDy, pend.frame);
+    } else {
+      pendingDrop = null;
+    }
   };
+
+  function commitLiftedDrop(
+    ghost: { x: number; y: number },
+    designDx: number,
+    designDy: number,
+    frame?: DropProposal | null,
+  ): void {
+    const A = model.lifted;
+    if (!A) return;
+
+    const enterDx = designDx / 40;
+    const enterDy = designDy / 40;
+    const proposal =
+      frame ??
+      proposeDrop(model.board, A, ghost, {
+        enterDx,
+        enterDy,
+        origin: { x: A.x, y: A.y },
+      });
+    const gx = proposal.ghost.x;
+    const gy = proposal.ghost.y;
+
+    if (gx === A.x && gy === A.y && proposal.kind === 'merge') {
+      const board = cloneBoard(model.board);
+      board.pieces.push({ ...A, x: A.x, y: A.y });
+      if (model.animating) {
+        set({
+          board,
+          lifted: null,
+          message: '放回原位',
+          visualPieces: model.visualPieces,
+        });
+        return;
+      }
+      checkDead(board, '放回原位');
+      return;
+    }
+
+    if (proposal.kind === 'merge' && proposal.targetId != null) {
+      if (model.animating) {
+        const target = getPiece(model.board, proposal.targetId);
+        if (!target || model.busyIds.includes(target.id)) {
+          pendingDrop = { ghost, designDx, designDy, frame: proposal };
+          set({ message: '等生长结束后合成' });
+          return;
+        }
+        pendingDrop = { ghost, designDx, designDy, frame: proposal };
+        set({ message: '等生长结束后合成' });
+        return;
+      }
+
+      const target = getPiece(model.board, proposal.targetId);
+      if (!target) {
+        bounceBack(A, '目标消失');
+        return;
+      }
+      const board = cloneBoard(model.board);
+      const seatX = proposal.locked
+        ? Math.max(0, Math.min(GRID_SIZE - A.w, target.x))
+        : gx;
+      const seatY = proposal.locked
+        ? Math.max(0, Math.min(GRID_SIZE - A.h, target.y))
+        : gy;
+      const aPiece: Piece = { ...A, x: seatX, y: seatY };
+      board.pieces.push(aPiece);
+
+      const useTrend =
+        proposal.growDirX !== 0 || proposal.growDirY !== 0
+          ? trendFromApproachDelta(
+              proposal.growDirX ?? 0,
+              proposal.growDirY ?? 0,
+            )
+          : trendFromApproachDelta(-enterDx, -enterDy);
+
+      const result = tryMerge(board, aPiece.id, target.id, useTrend, {
+        forcedTarget: proposal.mergeTarget ?? undefined,
+      });
+      if (result.ok) {
+        set({
+          animating: true,
+          lifted: null,
+          message: '推挤生长中…',
+          spawnFlashIds: [],
+          board: result.startBoard,
+          visualPieces: null,
+          busyIds: busyFromPlan(result.plan),
+        });
+        cancelAnim?.();
+        cancelAnim = playMergePlan(result.startBoard, result.plan, {
+          onVisual: (pieces) => {
+            model = { ...model, visualPieces: pieces, animating: true };
+            emit();
+          },
+          onDone: (finalBoard) => {
+            cancelAnim = null;
+            const piecesBefore = result.startBoard.pieces.length + 1;
+            afterMerge(
+              finalBoard,
+              result.createdValue,
+              piecesBefore,
+              A.color,
+              slideDirFromPlan(result.plan),
+            );
+          },
+        }).cancel;
+        return;
+      }
+
+      bounceBack(
+        A,
+        result.reason === 'color'
+          ? '异色不能合成'
+          : result.reason === 'orient'
+            ? '朝向不同：横只能合横，竖只能合竖'
+            : result.reason === 'place'
+              ? '合失败：预览方向推不开（或挡路）'
+              : `合失败（${result.reason}）`,
+      );
+      return;
+    }
+
+    if (proposal.kind === 'move') {
+      const board = cloneBoard(model.board);
+      board.pieces.push({ ...A, x: A.x, y: A.y });
+      if (model.animating) {
+        set({
+          board,
+          lifted: null,
+          message: '放回原位',
+          visualPieces: model.visualPieces,
+        });
+        return;
+      }
+      checkDead(board, '放回原位');
+      return;
+    }
+
+    bounceBack(A, proposal.reason || '只能拖去合并，弹回');
+  }
 
   return {
     get: () => model,
@@ -206,6 +427,7 @@ export function createGame() {
     restart: () => {
       cancelAnim?.();
       cancelAnim = null;
+      pendingDrop = null;
       set({
         board: dealOpening(2, 1),
         status: 'playing',
@@ -217,11 +439,13 @@ export function createGame() {
         spawnFlashIds: [],
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
     },
     loadDebug: () => {
       cancelAnim?.();
       cancelAnim = null;
+      pendingDrop = null;
       set({
         board: dealDebugNear64(model.unlockedColors),
         status: 'playing',
@@ -231,12 +455,14 @@ export function createGame() {
         spawnFlashIds: [],
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
     },
     /** 试玩用：跳过满屏，直接进下一关开局剧本 */
     debugNextWave: () => {
       cancelAnim?.();
       cancelAnim = null;
+      pendingDrop = null;
       const wave = model.wave + 1;
       const unlocked = unlockedColorsForWave(wave);
       set({
@@ -250,11 +476,13 @@ export function createGame() {
         spawnFlashIds: [],
         animating: false,
         visualPieces: null,
+        busyIds: [],
       });
     },
     beginLift: (pieceId: number) => {
-      if (model.status === 'dead' || model.animating) return false;
+      if (model.status === 'dead') return false;
       if (model.lifted) return false;
+      if (model.busyIds.includes(pieceId)) return false;
       const p = getPiece(model.board, pieceId);
       if (!p) return false;
       const board = cloneBoard(model.board);
@@ -263,131 +491,31 @@ export function createGame() {
         board,
         lifted: { ...p },
         message: `拖动 ${p.value}`,
-        visualPieces: null,
+        visualPieces: model.animating ? model.visualPieces : null,
         spawnFlashIds: [],
       });
       return true;
     },
     cancelLift: () => {
       if (!model.lifted) return;
+      pendingDrop = null;
       const board = cloneBoard(model.board);
       board.pieces.push({ ...model.lifted });
-      set({ board, lifted: null, message: '取消', visualPieces: null });
+      set({
+        board,
+        lifted: null,
+        message: '取消',
+        visualPieces: model.animating ? model.visualPieces : null,
+      });
     },
-    /**
-     * Commit last preview frame only (FINDINGS: no second direction recompute).
-     * Pass full DropProposal from view when available.
-     */
     dropAt: (
       ghost: { x: number; y: number },
       designDx: number,
       designDy: number,
       frame?: DropProposal | null,
     ) => {
-      const A = model.lifted;
-      if (!A || model.animating) return;
-
-      const enterDx = designDx / 40;
-      const enterDy = designDy / 40;
-      const proposal =
-        frame ??
-        proposeDrop(model.board, A, ghost, {
-          enterDx,
-          enterDy,
-          origin: { x: A.x, y: A.y },
-        });
-      const gx = proposal.ghost.x;
-      const gy = proposal.ghost.y;
-
-      // Double-check home cancel (adjacent same-value must not merge)
-      if (
-        gx === A.x &&
-        gy === A.y &&
-        proposal.kind === 'merge'
-      ) {
-        const board = cloneBoard(model.board);
-        board.pieces.push({ ...A, x: A.x, y: A.y });
-        checkDead(board, '放回原位');
-        return;
-      }
-
-      if (proposal.kind === 'merge' && proposal.targetId != null) {
-        const target = getPiece(model.board, proposal.targetId);
-        if (!target) {
-          bounceBack(A, '目标消失');
-          return;
-        }
-        const board = cloneBoard(model.board);
-        // Soft magnet during drag may leave G off-flush; on commit seat A on B
-        // so tryMerge still has contact (preview stay weakly attracted only).
-        const seatX = proposal.locked
-          ? Math.max(0, Math.min(GRID_SIZE - A.w, target.x))
-          : gx;
-        const seatY = proposal.locked
-          ? Math.max(0, Math.min(GRID_SIZE - A.h, target.y))
-          : gy;
-        const aPiece: Piece = { ...A, x: seatX, y: seatY };
-        board.pieces.push(aPiece);
-
-        // Trend from preview grow dirs / finger bias (fallback)
-        const useTrend =
-          proposal.growDirX !== 0 || proposal.growDirY !== 0
-            ? trendFromApproachDelta(
-                proposal.growDirX ?? 0,
-                proposal.growDirY ?? 0,
-              )
-            : trendFromApproachDelta(-enterDx, -enterDy);
-
-        const result = tryMerge(board, aPiece.id, target.id, useTrend, {
-          forcedTarget: proposal.mergeTarget ?? undefined,
-        });
-        if (result.ok) {
-          set({
-            animating: true,
-            lifted: null,
-            message: '推挤生长中…',
-            spawnFlashIds: [],
-            board: result.startBoard,
-            visualPieces: null,
-          });
-          cancelAnim?.();
-          cancelAnim = playMergePlan(result.startBoard, result.plan, {
-            onVisual: (pieces) => {
-              model = { ...model, visualPieces: pieces, animating: true };
-              emit();
-            },
-            onDone: (finalBoard) => {
-              cancelAnim = null;
-              // startBoard = after absorb A; +1 ≈ A so lost ≈ pushed off + absorbed
-              const piecesBefore = result.startBoard.pieces.length + 1;
-              afterMerge(finalBoard, result.createdValue, piecesBefore, A.color);
-            },
-          }).cancel;
-          return;
-        }
-
-        bounceBack(
-          A,
-          result.reason === 'color'
-            ? '异色不能合成'
-            : result.reason === 'orient'
-              ? '朝向不同：横只能合横，竖只能合竖'
-              : result.reason === 'place'
-                ? '合失败：预览方向推不开（或挡路）'
-                : `合失败（${result.reason}）`,
-        );
-        return;
-      }
-
-      // kind `move` = return home only (free place disabled)
-      if (proposal.kind === 'move') {
-        const board = cloneBoard(model.board);
-        board.pieces.push({ ...A, x: A.x, y: A.y });
-        checkDead(board, '放回原位');
-        return;
-      }
-
-      bounceBack(A, proposal.reason || '只能拖去合并，弹回');
+      if (!model.lifted) return;
+      commitLiftedDrop(ghost, designDx, designDy, frame);
     },
     upgradeSelected: (pieceId: number) => {
       if (model.animating) return;

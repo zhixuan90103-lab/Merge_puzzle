@@ -31,12 +31,13 @@
 | `previewPush.ts` | 推挤预览状态机（[DESIGN_PREVIEW](./DESIGN_PREVIEW.md)） |
 | `merge.ts` | tryMerge、面对齐推链、前缘分层；≤2V 可推 |
 | `plan.ts` · `timeline.ts` | 步进计划与连续动画 |
-| `fill.ts` | **闭包补满**：推出后 pack 至 64；配对/合后色；防补死 |
+| `fill.ts` | **闭包补满**：推出后 pack 至 64；**只补本次合成色**；防补死 |
 | `spawn.ts` | 遗留工具；合后入口 re-export `fill` |
 | `deadlock.ts` | `isPlayable` / `isForcedLoss` / `isSafeToContinue` / `isDeadlock` |
 | `move.ts` | **遗留**：自由搬家已禁用（接口可保留） |
 | `game.ts` | 状态机、wave、unlockedColors、afterMerge |
-| `view.ts` | DOM 棋盘与拖预览 |
+| `view.ts` | DOM 棋盘、Goo、T*、提交 |
+| `previewPush.ts` | 推挤预览 toward / pin / fly-out |
 | `visual.ts` | 块视觉辅助 |
 
 ---
@@ -45,12 +46,12 @@
 
 ```
 pointerdown  → hitTest → beginLift
-pointermove  → dragPhase FREE|LOCKED + proposeDrop
-               蓝可合 / 灰原位 / 红非法 + T*
-               方向：落点/微滑瞄准 > 异色可推 > 空地边
-pointerup    → dropAt(最后一帧提案)
+pointermove  → dragPhase FREE|LOCKED（连续重叠）+ proposeDrop
+               融合皮 + T*（钉住/磁滞）+ 推挤预览（previewPush）
+               方向：伸出边瞄准 > 异色可推 > 空地边
+pointerup    → dropAt(钉住的 T* / 最后一帧提案)
                ├─ merge → A 逻辑落 B → tryMerge(forcedTarget: T*)
-               │          → playMergePlan
+               │          → 盘内 pin · 出盘 fly-out · playMergePlan（B 生长）
                │          → afterMerge
                │             ├─ 64 → dealAfterClear(下一关·满盘)
                │             ├─ area<64 → fillToFull（补满·盘上色·防死）

@@ -150,4 +150,6 @@ else
 - [ ] 无瞄准且一侧有异色可推 ⇒ T\* 朝异色，不先铺对面空地  
 - [ ] 手指靠上/靠侧 ⇒ 生长跟落点，不无故铺空  
 
+预览手感验收见 [DESIGN_PREVIEW.md](./DESIGN_PREVIEW.md) §9。
+
 **关卡债：** `validate:levels` 关 3、5 在新推规则下 clearable=false，需按面对齐重摆（非意图 bug）。 
