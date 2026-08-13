@@ -52,8 +52,7 @@ export function shouldUseDevicePreview(): boolean {
   const q = new URLSearchParams(window.location.search).get('preview');
   if (q === '0' || q === 'false') return false;
   if (q === '1' || q === 'true') return true;
-  if (window.innerWidth <= 500) return false;
-  return true;
+  return false;
 }
 
 export function loadPreviewDeviceId(): PreviewDeviceId {

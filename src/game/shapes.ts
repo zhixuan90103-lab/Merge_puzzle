@@ -107,16 +107,46 @@ export function cellsOfRect(x: number, y: number, w: number, h: number): { x: nu
   return cells;
 }
 
-/** Hue per color index (max 5). Value lifts lightness. */
-const COLOR_HUES = [210, 145, 32, 300, 0];
+const PIECE_PALETTE = ['#56A7F3', '#69EF4D', '#FFB43D', '#A836F1', '#F2574B'] as const;
 
-/** Fill by palette color + value tier (not value-only). */
-export function pieceFillColor(color: number, value: number): string {
-  const hue = COLOR_HUES[((color % COLOR_HUES.length) + COLOR_HUES.length) % COLOR_HUES.length]!;
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const v = hex.replace('#', '');
+  return {
+    r: Number.parseInt(v.slice(0, 2), 16),
+    g: Number.parseInt(v.slice(2, 4), 16),
+    b: Number.parseInt(v.slice(4, 6), 16),
+  };
+}
+
+function mixChannel(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t);
+}
+
+function mixHex(hex: string, target: '#ffffff' | '#000000', t: number): string {
+  const a = hexToRgb(hex);
+  const b = target === '#ffffff' ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
+  return `rgb(${mixChannel(a.r, b.r, t)} ${mixChannel(a.g, b.g, t)} ${mixChannel(a.b, b.b, t)})`;
+}
+
+function paletteBase(color: number): string {
+  return PIECE_PALETTE[((color % PIECE_PALETTE.length) + PIECE_PALETTE.length) % PIECE_PALETTE.length]!;
+}
+
+/** Fill by locked soft-plastic palette. Top face stays solid; volume is in side/shadow. */
+export function pieceFillColor(color: number, _value: number): string {
+  const base = paletteBase(color);
+  return mixHex(base, '#ffffff', 0.03);
+}
+
+export function pieceShadowColor(color: number): string {
+  const base = hexToRgb(paletteBase(color));
+  return `${base.r} ${base.g} ${base.b}`;
+}
+
+export function pieceDepthColor(color: number, value: number): string {
+  const base = paletteBase(color);
   const tier = Math.max(0, Math.min(6, Math.log2(Math.max(1, value))));
-  const sat = 58 + tier * 4;
-  const light = 38 + tier * 5;
-  return `hsl(${hue} ${sat}% ${light}%)`;
+  return mixHex(base, '#000000', 0.08 + tier * 0.008);
 }
 
 /** @deprecated use pieceFillColor — kept for single-color debug */

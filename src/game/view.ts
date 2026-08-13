@@ -14,7 +14,7 @@ import {
 } from './dropResolve';
 import { lockAimCombined, SOFT_PULL_VISUAL } from './intent';
 import { proposalForLifted, type DropProposal, type GameModel } from './game';
-import { pieceFillColor, shapeAxis } from './shapes';
+import { pieceDepthColor, pieceFillColor, pieceShadowColor, shapeAxis } from './shapes';
 import type { Piece } from './types';
 import { GRID_SIZE } from './types';
 import type { VisualPiece } from './timeline';
@@ -25,6 +25,10 @@ export type BoardLayout = {
   cell: number;
   size: number;
 };
+
+const CELL_INSET = 1.5;
+const PIECE_SHINE =
+  '<svg class="piece-shine" viewBox="0 0 22 30" aria-hidden="true"><path d="M4.2 3.8C12.3 3.8 18.1 9.7 18.1 17.8V25.5" /></svg>';
 
 export function computeBoardLayout(): BoardLayout {
   const size = 360;
@@ -40,6 +44,8 @@ export function mountGameView(
   api: ReturnType<typeof import('./game').createGame>,
   getStageLayout: () => StageLayout | null,
 ): { destroy: () => void } {
+  const debugUi = new URLSearchParams(window.location.search).has('debug');
+  document.body.classList.toggle('debug-game-labels', debugUi);
   const boardLayout = computeBoardLayout();
   const cell = boardLayout.cell;
 
@@ -49,42 +55,41 @@ export function mountGameView(
     position:absolute; left:${boardLayout.originX}px; top:${boardLayout.originY}px;
     width:${boardLayout.size}px; height:${boardLayout.size}px;
     z-index:1; touch-action:none;
-    background: rgba(15,23,42,0.95);
-    border: 2px solid rgba(148,163,184,0.35);
-    border-radius: 12px;
-    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
+    background: #eef2f5;
+    border: 0;
+    border-radius: 11px;
+    box-shadow:
+      0 0 0 9px #f7f8f8,
+      0 0 0 13px #c5cdd2,
+      inset 0 2px 7px rgba(95,104,112,0.16),
+      inset 0 1px 0 rgba(255,255,255,0.9),
+      0 16px 24px rgba(55,98,132,0.24);
     overflow: visible;
   `;
   stage.appendChild(boardRoot);
 
-  const gridSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  gridSvg.setAttribute('width', String(boardLayout.size));
-  gridSvg.setAttribute('height', String(boardLayout.size));
-  gridSvg.style.cssText = 'position:absolute;inset:0;pointer-events:none;opacity:0.25';
-  for (let i = 0; i <= GRID_SIZE; i++) {
-    const v = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    v.setAttribute('x1', String(i * cell));
-    v.setAttribute('x2', String(i * cell));
-    v.setAttribute('y1', '0');
-    v.setAttribute('y2', String(boardLayout.size));
-    v.setAttribute('stroke', '#94a3b8');
-    gridSvg.appendChild(v);
-    const h = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    h.setAttribute('y1', String(i * cell));
-    h.setAttribute('y2', String(i * cell));
-    h.setAttribute('x1', '0');
-    h.setAttribute('x2', String(boardLayout.size));
-    h.setAttribute('stroke', '#94a3b8');
-    gridSvg.appendChild(h);
+  const gridLayer = document.createElement('div');
+  gridLayer.className = 'board-grid-cells';
+  gridLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const c = document.createElement('div');
+      c.className = 'board-cell';
+      c.style.left = `${x * cell + CELL_INSET}px`;
+      c.style.top = `${y * cell + CELL_INSET}px`;
+      c.style.width = `${cell - CELL_INSET * 2}px`;
+      c.style.height = `${cell - CELL_INSET * 2}px`;
+      gridLayer.appendChild(c);
+    }
   }
-  boardRoot.appendChild(gridSvg);
+  boardRoot.appendChild(gridLayer);
 
   const piecesLayer = document.createElement('div');
   piecesLayer.style.cssText = 'position:absolute;inset:0;';
   boardRoot.appendChild(piecesLayer);
 
   const dragLayer = document.createElement('div');
-  dragLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6;';
+  dragLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2000;';
   boardRoot.appendChild(dragLayer);
 
   /** Apple-style drop proposal shadow (sessionDidUpdate) */
@@ -92,7 +97,7 @@ export function mountGameView(
   proposalEl.className = 'drop-proposal';
   proposalEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:5; display:none;
-    border-radius:8px; box-sizing:border-box;
+    border-radius:14px; box-sizing:border-box;
     border:2px dashed transparent;
     transition: left 40ms linear, top 40ms linear, background 80ms ease, border-color 80ms ease;
   `;
@@ -102,8 +107,8 @@ export function mountGameView(
   targetRingEl.className = 'merge-target-ring';
   targetRingEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:4; display:none;
-    border-radius:10px; box-sizing:border-box;
-    border:2px solid #38bdf8; box-shadow:0 0 0 3px rgba(56,189,248,0.25);
+    border-radius:16px; box-sizing:border-box;
+    border:2px solid #5ec8ff; box-shadow:0 0 0 3px rgba(94,200,255,0.22);
     transition: border-color 80ms ease, box-shadow 80ms ease;
   `;
   boardRoot.appendChild(targetRingEl);
@@ -113,9 +118,9 @@ export function mountGameView(
   mergeShapeEl.className = 'merge-shape-preview';
   mergeShapeEl.style.cssText = `
     position:absolute; pointer-events:none; z-index:4; display:none;
-    border-radius:10px; box-sizing:border-box;
-    border:2px dashed rgba(167,139,250,0.95);
-    background:rgba(167,139,250,0.12);
+    border-radius:16px; box-sizing:border-box;
+    border:2px dashed rgba(183,148,246,0.92);
+    background:rgba(183,148,246,0.1);
   `;
   boardRoot.appendChild(mergeShapeEl);
 
@@ -123,9 +128,9 @@ export function mountGameView(
   const header = document.createElement('header');
   header.style.cssText = 'pointer-events:none;';
   header.innerHTML = `
-    <p class="eyebrow" style="margin:0;opacity:.7;font-size:11px;">Merge Puzzle · 原型</p>
+    <p class="eyebrow" style="margin:0;font-size:11px;">Merge Puzzle · 原型</p>
     <h1 style="margin:4px 0 0;font-size:18px;">合成占位</h1>
-    <p id="game-status" class="status" style="margin:6px 0 0;font-size:12px;line-height:1.4;white-space:pre-wrap;"></p>
+    <p id="game-status" class="status"></p>
   `;
   const panel = document.createElement('section');
   panel.className = 'panel';
@@ -136,7 +141,6 @@ export function mountGameView(
       <button type="button" id="btn-restart">重开</button>
       <button type="button" id="btn-next-wave">下一关</button>
       <button type="button" id="btn-debug">Debug盘</button>
-      <button type="button" id="btn-upgrade">升级选中</button>
     </div>
     <p id="game-hint" class="log" style="margin:8px 0 0;font-size:11px;opacity:.75;">
       大拖选合谁 → 吸住后小滑定方向；不滑则优先推异色，否则空地。
@@ -144,11 +148,12 @@ export function mountGameView(
   `;
   uiRoot.appendChild(header);
   uiRoot.appendChild(panel);
+  if (!debugUi) {
+    panel.querySelector('#btn-debug')?.remove();
+  }
 
   const statusEl = header.querySelector('#game-status') as HTMLElement;
   const hintEl = panel.querySelector('#game-hint') as HTMLElement;
-  let selectedId: number | null = null;
-
   const pieceEls = new Map<number, HTMLElement>();
 
   /** Full style paint (lift / idle). */
@@ -179,13 +184,14 @@ export function mountGameView(
     const isPushed = opts.pushed ?? p.pushed;
     const isGrowing = opts.growing ?? p.growing;
     const sc = opts.scale ?? 1;
+    const baseZ = Math.max(1, Math.round((p.y + p.h) * 10));
 
     // Prefer transform for motion frames (composited)
     if (opts.motionOnly) {
-      const left = p.x * cell + 2;
-      const top = p.y * cell + 2;
-      const pw = p.w * cell - 4;
-      const ph = p.h * cell - 4;
+      const left = p.x * cell + CELL_INSET;
+      const top = p.y * cell + CELL_INSET;
+      const pw = p.w * cell - CELL_INSET * 2;
+      const ph = p.h * cell - CELL_INSET * 2;
       el.style.transform = `translate3d(${left}px,${top}px,0) scale(${sc})`;
       el.style.width = `${pw}px`;
       el.style.height = `${ph}px`;
@@ -198,11 +204,11 @@ export function mountGameView(
         el.dataset.mode = mode;
         if (isGrowing) {
           // Growing body: slight outline only, no big elevation shadow
-          el.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.9)';
-          el.style.zIndex = '3';
+          el.style.boxShadow = '0 0 0 2px rgba(183,148,246,0.62), 0 3px 6px rgba(var(--piece-shadow),0.14)';
+          el.style.zIndex = String(baseZ + 300);
         } else {
-          el.style.boxShadow = '0 2px 6px rgba(0,0,0,.35)';
-          el.style.zIndex = '1';
+          el.style.boxShadow = '0 3px 6px rgba(var(--piece-shadow),0.12)';
+          el.style.zIndex = String(baseZ);
         }
       }
       // value/color may change mid-grow / after clip — always refresh fill
@@ -211,35 +217,40 @@ export function mountGameView(
       const col =
         typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
       const label = `${p.value}|${col}|${mark}`;
-      el.style.background = pieceFillColor(col, p.value);
+      el.style.background = 'transparent';
+      el.style.setProperty('--piece-fill', pieceFillColor(col, p.value));
+      el.style.setProperty('--piece-depth', pieceDepthColor(col, p.value));
+      el.style.setProperty('--piece-shadow', pieceShadowColor(col));
+      el.style.setProperty('--shine-scale', p.w >= 2 && p.h >= 2 ? '1' : '0.72');
       if (el.dataset.label !== label) {
         el.dataset.label = label;
         el.innerHTML = mark
-          ? `<span>${p.value}</span><span class="piece-axis">${mark}</span>`
-          : `<span>${p.value}</span>`;
+          ? `<span class="piece-depth"></span><span class="piece-face">${PIECE_SHINE}<span class="piece-value">${p.value}</span><span class="piece-axis">${mark}</span></span>`
+          : `<span class="piece-depth"></span><span class="piece-face">${PIECE_SHINE}<span class="piece-value">${p.value}</span></span>`;
       }
       return;
     }
 
-    el.style.left = `${p.x * cell + 2}px`;
-    el.style.top = `${p.y * cell + 2}px`;
-    el.style.width = `${p.w * cell - 4}px`;
-    el.style.height = `${p.h * cell - 4}px`;
+    el.style.left = `${p.x * cell + CELL_INSET}px`;
+    el.style.top = `${p.y * cell + CELL_INSET}px`;
+    el.style.width = `${p.w * cell - CELL_INSET * 2}px`;
+    el.style.height = `${p.h * cell - CELL_INSET * 2}px`;
     el.style.transform = sc !== 1 ? `scale(${sc})` : '';
     el.style.transformOrigin = 'center center';
     {
       const col =
         typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
-      el.style.background = pieceFillColor(col, p.value);
+      el.style.background = 'transparent';
+      el.style.setProperty('--piece-fill', pieceFillColor(col, p.value));
+      el.style.setProperty('--piece-depth', pieceDepthColor(col, p.value));
+      el.style.setProperty('--piece-shadow', pieceShadowColor(col));
+      el.style.setProperty('--shine-scale', p.w >= 2 && p.h >= 2 ? '1' : '0.72');
     }
-    el.style.borderRadius = '8px';
-    el.style.display = 'flex';
-    el.style.flexDirection = 'column';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
+    el.style.borderRadius = '15px';
+    el.style.display = 'block';
     el.style.fontWeight = '800';
     el.style.fontSize = `${Math.max(12, Math.min(22, cell * 0.4))}px`;
-    el.style.color = '#0f172a';
+    el.style.color = 'rgba(107,101,120,0.62)';
     el.style.opacity = String(p.opacity ?? 1);
     el.style.boxSizing = 'border-box';
     el.style.transition = 'none';
@@ -251,37 +262,38 @@ export function mountGameView(
       typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
     const label = `${p.value}|${col}|${mark}`;
     // Always re-apply fill so clip 2→1 never sticks on wrong palette
-    el.style.background = pieceFillColor(col, p.value);
+    el.style.background = 'transparent';
+    el.style.setProperty('--piece-fill', pieceFillColor(col, p.value));
+    el.style.setProperty('--piece-depth', pieceDepthColor(col, p.value));
+    el.style.setProperty('--piece-shadow', pieceShadowColor(col));
+    el.style.setProperty('--shine-scale', p.w >= 2 && p.h >= 2 ? '1' : '0.72');
     if (el.dataset.label !== label) {
       el.dataset.label = label;
       el.innerHTML = mark
-        ? `<span>${p.value}</span><span class="piece-axis">${mark}</span>`
-        : `<span>${p.value}</span>`;
+        ? `<span class="piece-depth"></span><span class="piece-face">${PIECE_SHINE}<span class="piece-value">${p.value}</span><span class="piece-axis">${mark}</span></span>`
+        : `<span class="piece-depth"></span><span class="piece-face">${PIECE_SHINE}<span class="piece-value">${p.value}</span></span>`;
     }
     el.dataset.pieceId = String(p.id);
     el.dataset.mode = '';
 
     if (opts.lifting) {
-      el.style.boxShadow = '0 12px 28px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.2)';
-      el.style.zIndex = '10';
+      el.style.boxShadow = '0 12px 20px rgba(var(--piece-shadow),0.22), 0 0 0 1px rgba(255,255,255,0.24)';
+      el.style.zIndex = String(baseZ + 1000);
     } else if (isGrowing) {
       // Grow only: thin ring, same plane (z just above static for draw order)
-      el.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.9)';
-      el.style.zIndex = '3';
+      el.style.boxShadow = '0 0 0 2px rgba(183,148,246,0.62), 0 3px 6px rgba(var(--piece-shadow),0.14)';
+      el.style.zIndex = String(baseZ + 300);
     } else if (isPushed) {
       // Pushed = normal piece (no float) — feels like ground-level shove
-      el.style.boxShadow = '0 2px 6px rgba(0,0,0,.35)';
-      el.style.zIndex = '1';
-    } else if (selectedId === p.id) {
-      el.style.boxShadow = '0 0 0 2px #f8fafc';
-      el.style.zIndex = '2';
+      el.style.boxShadow = '0 2px 5px rgba(var(--piece-shadow),0.1)';
+      el.style.zIndex = String(baseZ + 100);
     } else {
-      el.style.boxShadow = '0 2px 6px rgba(0,0,0,.35)';
-      el.style.zIndex = '1';
+      el.style.boxShadow = '0 3px 6px rgba(var(--piece-shadow),0.12)';
+      el.style.zIndex = String(baseZ);
     }
 
-    if (axis === 'h') el.style.outline = '2px solid rgba(56,189,248,0.85)';
-    else if (axis === 'v') el.style.outline = '2px solid rgba(251,191,36,0.9)';
+    if (debugUi && axis === 'h') el.style.outline = '2px solid rgba(94,200,255,0.78)';
+    else if (debugUi && axis === 'v') el.style.outline = '2px solid rgba(255,213,74,0.82)';
     else el.style.outline = 'none';
 
     el.classList.toggle('piece-spawn', !!opts.flash);
@@ -306,7 +318,7 @@ export function mountGameView(
         el = document.createElement('div');
         el.className = 'piece';
         el.style.cssText =
-          'position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:#0f172a;box-sizing:border-box;';
+          'position:absolute;left:0;top:0;touch-action:none;cursor:grab;user-select:none;will-change:transform,width,height,opacity;border-radius:15px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;color:rgba(107,101,120,0.62);box-sizing:border-box;';
         piecesLayer.appendChild(el);
         pieceEls.set(p.id, el);
         // first paint full
@@ -353,31 +365,29 @@ export function mountGameView(
     const statusKey = `${g.wave}|${g.unlockedColors}|${phase}|${g.message}`;
     if (statusKey !== lastStatusKey) {
       lastStatusKey = statusKey;
-      statusEl.textContent = `波次 ${g.wave} · ${g.unlockedColors} 色 · ${phase}\n${g.message}`;
+      statusEl.textContent = `波次 ${g.wave} · ${g.unlockedColors} 色 · ${phase}`;
     }
-    if (!hintEl.dataset.ready) {
-      hintEl.dataset.ready = '1';
-      hintEl.textContent =
-        '蓝=可合 · 紫虚线=生长方向 · 红=非法。叠在对子上时，用最后一小段滑动控制生长。';
+    if (debugUi) {
+      if (!hintEl.dataset.ready) {
+        hintEl.dataset.ready = '1';
+        hintEl.textContent =
+          '蓝=可合 · 紫虚线=生长方向 · 红=非法。叠在对子上时，用最后一小段滑动控制生长。';
+      }
+    } else {
+      hintEl.textContent = g.message;
     }
   };
 
   const unsub = api.subscribe(render);
 
   panel.querySelector('#btn-restart')!.addEventListener('click', () => {
-    selectedId = null;
     api.restart();
   });
-  panel.querySelector('#btn-next-wave')!.addEventListener('click', () => {
-    selectedId = null;
+  panel.querySelector('#btn-next-wave')?.addEventListener('click', () => {
     api.debugNextWave();
   });
-  panel.querySelector('#btn-debug')!.addEventListener('click', () => {
-    selectedId = null;
+  panel.querySelector('#btn-debug')?.addEventListener('click', () => {
     api.loadDebug();
-  });
-  panel.querySelector('#btn-upgrade')!.addEventListener('click', () => {
-    if (selectedId != null) api.upgradeSelected(selectedId);
   });
 
   // ——— Drag: hit-test lift · continuous proposal · commit same rules ———
@@ -421,22 +431,22 @@ export function mountGameView(
       return;
     }
     proposalEl.style.display = 'block';
-    proposalEl.style.left = `${prop.ghost.x * cell + 2}px`;
-    proposalEl.style.top = `${prop.ghost.y * cell + 2}px`;
-    proposalEl.style.width = `${A.w * cell - 4}px`;
-    proposalEl.style.height = `${A.h * cell - 4}px`;
+    proposalEl.style.left = `${prop.ghost.x * cell + CELL_INSET}px`;
+    proposalEl.style.top = `${prop.ghost.y * cell + CELL_INSET}px`;
+    proposalEl.style.width = `${A.w * cell - CELL_INSET * 2}px`;
+    proposalEl.style.height = `${A.h * cell - CELL_INSET * 2}px`;
     // Solid border for snap accuracy (FINDINGS: outline > soft shadow)
     proposalEl.style.borderStyle = 'solid';
     // kind `move` = return home (cancel); free place is disabled
     if (prop.kind === 'move') {
-      proposalEl.style.background = 'rgba(148, 163, 184, 0.2)';
-      proposalEl.style.borderColor = 'rgba(148, 163, 184, 0.85)';
+      proposalEl.style.background = 'rgba(132, 136, 150, 0.12)';
+      proposalEl.style.borderColor = 'rgba(120, 125, 140, 0.45)';
     } else if (prop.kind === 'merge') {
-      proposalEl.style.background = 'rgba(56, 189, 248, 0.22)';
-      proposalEl.style.borderColor = 'rgba(56, 189, 248, 0.95)';
+      proposalEl.style.background = 'rgba(94, 200, 255, 0.18)';
+      proposalEl.style.borderColor = 'rgba(94, 200, 255, 0.92)';
     } else {
-      proposalEl.style.background = 'rgba(248, 113, 113, 0.18)';
-      proposalEl.style.borderColor = 'rgba(248, 113, 113, 0.9)';
+      proposalEl.style.background = 'rgba(255, 139, 122, 0.14)';
+      proposalEl.style.borderColor = 'rgba(255, 139, 122, 0.68)';
     }
 
     if (prop.kind === 'merge' && prop.targetId != null) {
@@ -449,13 +459,13 @@ export function mountGameView(
         targetRingEl.style.width = `${t.w * cell}px`;
         targetRingEl.style.height = `${t.h * cell}px`;
         if (prop.locked) {
-          targetRingEl.style.borderColor = prop.playerAim ? '#a78bfa' : '#38bdf8';
+          targetRingEl.style.borderColor = prop.playerAim ? '#b794f6' : '#5ec8ff';
           targetRingEl.style.boxShadow = prop.playerAim
-            ? '0 0 0 3px rgba(167,139,250,0.28)'
-            : '0 0 0 2px rgba(56,189,248,0.3)';
+            ? '0 0 0 3px rgba(183,148,246,0.22)'
+            : '0 0 0 2px rgba(94,200,255,0.24)';
         } else {
-          targetRingEl.style.borderColor = '#38bdf8';
-          targetRingEl.style.boxShadow = '0 0 0 2px rgba(56,189,248,0.2)';
+          targetRingEl.style.borderColor = '#5ec8ff';
+          targetRingEl.style.boxShadow = '0 0 0 2px rgba(94,200,255,0.18)';
         }
       } else {
         targetRingEl.style.display = 'none';
@@ -468,13 +478,13 @@ export function mountGameView(
     if (prop.kind === 'merge' && prop.mergeTarget) {
       const T = prop.mergeTarget;
       mergeShapeEl.style.display = 'block';
-      mergeShapeEl.style.left = `${T.x * cell + 1}px`;
-      mergeShapeEl.style.top = `${T.y * cell + 1}px`;
-      mergeShapeEl.style.width = `${T.w * cell - 2}px`;
-      mergeShapeEl.style.height = `${T.h * cell - 2}px`;
+      mergeShapeEl.style.left = `${T.x * cell + CELL_INSET}px`;
+      mergeShapeEl.style.top = `${T.y * cell + CELL_INSET}px`;
+      mergeShapeEl.style.width = `${T.w * cell - CELL_INSET * 2}px`;
+      mergeShapeEl.style.height = `${T.h * cell - CELL_INSET * 2}px`;
       if (prop.bilateral) {
         mergeShapeEl.style.borderStyle = 'dashed';
-        mergeShapeEl.style.boxShadow = 'inset 0 0 0 1px rgba(167,139,250,0.5)';
+        mergeShapeEl.style.boxShadow = 'inset 0 0 0 1px rgba(183,148,246,0.36)';
       } else {
         mergeShapeEl.style.borderStyle = 'dashed';
         mergeShapeEl.style.boxShadow = 'none';
@@ -568,20 +578,20 @@ export function mountGameView(
     let left = a.x - (pieceStart.w * cell) / 2;
     let top = a.y - (pieceStart.h * cell) / 2;
     if (phaseState.phase === 'locked' && phaseState.lockB) {
-      const bx = phaseState.lockB.x * cell + 2;
-      const by = phaseState.lockB.y * cell + 2;
+      const bx = phaseState.lockB.x * cell + CELL_INSET;
+      const by = phaseState.lockB.y * cell + CELL_INSET;
       left = left + (bx - left) * SOFT_PULL_VISUAL;
       top = top + (by - top) * SOFT_PULL_VISUAL;
     }
     dragEl.style.left = `${left}px`;
     dragEl.style.top = `${top}px`;
-    dragEl.style.width = `${pieceStart.w * cell - 4}px`;
-    dragEl.style.height = `${pieceStart.h * cell - 4}px`;
+    dragEl.style.width = `${pieceStart.w * cell - CELL_INSET * 2}px`;
+    dragEl.style.height = `${pieceStart.h * cell - CELL_INSET * 2}px`;
     dragEl.style.transform = `scale(${scale})`;
     dragEl.style.boxShadow =
       phaseState.phase === 'locked'
-        ? '0 8px 18px rgba(0,0,0,0.38), 0 0 0 1.5px rgba(56,189,248,0.4)'
-        : '0 10px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.12)';
+        ? '0 14px 24px rgba(var(--piece-shadow),0.28), 0 0 0 2px rgba(94,200,255,0.24)'
+        : '0 16px 28px rgba(var(--piece-shadow),0.26), 0 0 0 1px rgba(255,255,255,0.32)';
   };
 
   const animateLift = (from: number, to: number, ms: number, onDone?: () => void) => {
@@ -622,7 +632,6 @@ export function mountGameView(
     const hit = hitTestPiece(g.board, localX, localY, cell, 8);
     if (!hit) return;
 
-    selectedId = hit.id;
     if (!api.beginLift(hit.id)) return;
 
     dragging = true;
@@ -642,8 +651,8 @@ export function mountGameView(
     dragEl = document.createElement('div');
     dragEl.className = 'piece piece-dragging';
     dragEl.style.cssText = `
-      position:absolute; pointer-events:none; z-index:20;
-      border-radius:8px; display:flex; flex-direction:column;
+      position:absolute; pointer-events:none; z-index:3000;
+      border-radius:15px; display:flex; flex-direction:column;
       align-items:center; justify-content:center;
       font-weight:800; color:#0f172a; box-sizing:border-box;
       will-change:left,top,transform;
