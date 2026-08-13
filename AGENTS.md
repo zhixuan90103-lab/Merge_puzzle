@@ -19,6 +19,7 @@
 | **[docs/CHANGELOG_PROTOTYPE.md](./docs/CHANGELOG_PROTOTYPE.md)** | 变更汇总 |
 | [docs/ENGINEERING.md](./docs/ENGINEERING.md) | 工程约定 |
 | [docs/ENTRYPOINTS.md](./docs/ENTRYPOINTS.md) | 启动链 |
+| [docs/ART_DIRECTION.md](./docs/ART_DIRECTION.md) | 浅色软塑料换皮（实现色板见文内） |
 | [docs/CORE_CONCEPTS.md](./docs/CORE_CONCEPTS.md) | L2 手感/障碍草案 |
 | [docs/research/](./docs/research/) | 历史调研（非真源） |
 
@@ -75,6 +76,7 @@
 | 补满/出块 | `fill.ts` · `spawn.ts` |
 | 死局 | `deadlock.ts` |
 | 状态机 | `game.ts` |
+| 块色/塑料皮 | `shapes.ts` · `style.css` · `view.ts` |
 
 ## 命令
 

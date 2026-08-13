@@ -1,6 +1,7 @@
 # 需求整理（历史）
 
-> **过时。** 现行玩法真源：[GAME_RULES.md](./GAME_RULES.md) **v0.8**。  
+> **过时。** 现行玩法真源：[GAME_RULES.md](./GAME_RULES.md) **v0.9**。  
+> 拖合/推挤：[DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md)。
 > 下文保留 0.3 期讨论，仅供回溯。
 
 配套（现行）：[GAME_RULES.md](./GAME_RULES.md) · [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) · [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) · [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md)

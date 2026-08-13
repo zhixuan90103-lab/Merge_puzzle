@@ -1,6 +1,7 @@
 # 关卡设计备忘 — Merge Puzzle
 
-面向手摆开局（`deal.ts`），不是随机生成。规则真源：[GAME_RULES.md](./GAME_RULES.md) **v0.8**。
+面向手摆开局（`deal.ts`），不是随机生成。规则真源：[GAME_RULES.md](./GAME_RULES.md) **v0.9**。  
+推挤几何：[DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md)。**关 3 / 5** 在面对齐规则下校验暂失败，重摆前勿当回归绿。
 
 ## 外部原则（压缩）
 

@@ -3,8 +3,9 @@
 | 元数据 | 内容 |
 |--------|------|
 | 状态 | **与代码对齐** |
-| 版本 | **0.8** |
+| 版本 | **0.9** |
 | 实现 | `src/game/*` |
+| 拖合/推挤 | [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md) |
 | 架构 | [ARCHITECTURE_GAME.md](./ARCHITECTURE_GAME.md) |
 | 关卡 | [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) |
 | 变更 | [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md) |
@@ -65,7 +66,7 @@
 | 层 | 含义 |
 |----|------|
 | **G 投影** | 贴格落点：蓝可合 / 灰放回 / 红非法 |
-| **F 跟手** | FREE 连续体；LOCKED 后贴 B |
+| **F 跟手** | FREE 连续体；LOCKED **弱吸**（不焊死重合） |
 | **T* 紫虚线** | 合后外形预告；松手只认预览帧 |
 
 **两段式拖合**（真源 [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md)）：
@@ -90,7 +91,7 @@
 | 例 | 两竖 2 首尾叠 → 1×4；两 8 贴长边 → 长条 16；贴成方 → 4×4 | 已定 |
 | 净占格 | 两 V 合为 2V，占格不减 | 已定 |
 
-生长方向：跟手相对 B；真空槽可双侧；须在盘内。  
+生长方向：LOCKED 后落点 + 微滑；无瞄准则异色可推优先于空边；须在盘内。  
 执行：`findMergeShape` → `tryMerge(..., forcedTarget: T*)`。
 
 ---

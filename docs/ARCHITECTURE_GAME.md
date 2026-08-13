@@ -2,8 +2,9 @@
 
 | 元数据 | 内容 |
 |--------|------|
-| 版本 | **v0.8** |
+| 版本 | **v0.9** |
 | 规则真源 | [GAME_RULES.md](./GAME_RULES.md) |
+| 拖合/推挤 | [DESIGN_DRAG_MERGE.md](./DESIGN_DRAG_MERGE.md) |
 | 关卡 | [LEVEL_DESIGN.md](./LEVEL_DESIGN.md) |
 | 变更 | [CHANGELOG_PROTOTYPE.md](./CHANGELOG_PROTOTYPE.md) |
 
@@ -42,9 +43,11 @@
 
 ```
 pointerdown  → hitTest → beginLift
-pointermove  → proposeDrop → 蓝可合 / 灰原位 / 红非法 + T*
+pointermove  → dragPhase FREE|LOCKED + proposeDrop
+               蓝可合 / 灰原位 / 红非法 + T*
+               方向：落点/微滑瞄准 > 异色可推 > 空地边
 pointerup    → dropAt(最后一帧提案)
-               ├─ merge → tryMerge(forcedTarget: T*)
+               ├─ merge → A 逻辑落 B → tryMerge(forcedTarget: T*)
                │          → playMergePlan
                │          → afterMerge
                │             ├─ 64 → dealAfterClear(下一关·满盘)
@@ -61,7 +64,8 @@ pointerup    → dropAt(最后一帧提案)
 | 规则 | 实现 |
 |------|------|
 | 同色合 | `canMergePair` |
-| 合后形自由 | `allRectsForValue` + solid union 高分 |
+| 合后形自由 | `allRectsForValue`；评分瞄准/异色/空边（并集不再默认最高） |
+| 瞄准/吸附 | `intent` · `dragPhase` · 弱拉 ghost |
 | 推 ≤ 2V + 面对齐/分层 | `merge`：`rootsPushableByFront` · `layersFaceMatch` · 前缘平面 |
 | 两段拖合 | `dragPhase` + `view`；方向 `intent` + `dropResolve` |
 | 无搬家 | `dropResolve` 拒绝空地；`hasLegalMove` ≡ false |
@@ -103,4 +107,5 @@ pointerup    → dropAt(最后一帧提案)
 ## 6. 底座（非玩法）
 
 `adapt/*` · `create-renderer` · Capacitor · haptics：壳与真机；玩法逻辑不依赖其细节。  
+浅色 UI / 塑料块：`style.css` · `view.ts` · `shapes.PIECE_PALETTE`。  
 研究笔记在 `docs/research/**`，**不是规则真源**。
