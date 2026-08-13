@@ -261,6 +261,9 @@ button:active {
 #board-root .drop-proposal {
   pointer-events: none;
 }
+#board-root .merge-shape-preview {
+  pointer-events: none;
+}
 #board-root .merge-target-ring {
   pointer-events: none;
 }

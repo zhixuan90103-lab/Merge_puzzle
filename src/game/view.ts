@@ -115,16 +115,31 @@ export function mountGameView(
   `;
   boardRoot.appendChild(targetRingEl);
 
-  /** T* merge result outline */
+  /** T* — same plastic body as the piece, translucent. */
   const mergeShapeEl = document.createElement('div');
-  mergeShapeEl.className = 'merge-shape-preview';
+  mergeShapeEl.className = 'piece merge-shape-preview';
   mergeShapeEl.style.cssText = `
-    position:absolute; pointer-events:none; z-index:4; display:none;
-    border-radius:16px; box-sizing:border-box;
-    border:2px dashed rgba(183,148,246,0.92);
-    background:rgba(183,148,246,0.1);
+    position:absolute; pointer-events:none; z-index:3; display:none;
+    border-radius:15px; box-sizing:border-box; opacity:0.5;
   `;
+  mergeShapeEl.innerHTML = `<span class="piece-depth"></span><span class="piece-face"></span>`;
   boardRoot.appendChild(mergeShapeEl);
+
+  let tStarAnimRaf = 0;
+  let tStarKey = '';
+
+  const stopTStarAnim = () => {
+    if (tStarAnimRaf) cancelAnimationFrame(tStarAnimRaf);
+    tStarAnimRaf = 0;
+    tStarKey = '';
+  };
+
+  const applyTStarBox = (r: { x: number; y: number; w: number; h: number }) => {
+    mergeShapeEl.style.left = `${r.x * cell + CELL_INSET}px`;
+    mergeShapeEl.style.top = `${r.y * cell + CELL_INSET}px`;
+    mergeShapeEl.style.width = `${r.w * cell - CELL_INSET * 2}px`;
+    mergeShapeEl.style.height = `${r.h * cell - CELL_INSET * 2}px`;
+  };
 
   /**
    * Goo overlay on top of everything. Pieces stay as-is.
@@ -698,6 +713,7 @@ export function mountGameView(
       proposalEl.style.display = 'none';
       targetRingEl.style.display = 'none';
       mergeShapeEl.style.display = 'none';
+      stopTStarAnim();
       return;
     }
     proposalEl.style.display = 'none';
@@ -730,20 +746,43 @@ export function mountGameView(
     // T* growth shape preview
     if (prop.kind === 'merge' && prop.mergeTarget) {
       const T = prop.mergeTarget;
+      const fill = pieceFillColor(pieceStart.color, pieceStart.value * 2);
+      const depth = pieceDepthColor(pieceStart.color, pieceStart.value * 2);
       mergeShapeEl.style.display = 'block';
-      mergeShapeEl.style.left = `${T.x * cell + CELL_INSET}px`;
-      mergeShapeEl.style.top = `${T.y * cell + CELL_INSET}px`;
-      mergeShapeEl.style.width = `${T.w * cell - CELL_INSET * 2}px`;
-      mergeShapeEl.style.height = `${T.h * cell - CELL_INSET * 2}px`;
-      if (prop.bilateral) {
-        mergeShapeEl.style.borderStyle = 'dashed';
-        mergeShapeEl.style.boxShadow = 'inset 0 0 0 1px rgba(183,148,246,0.36)';
-      } else {
-        mergeShapeEl.style.borderStyle = 'dashed';
-        mergeShapeEl.style.boxShadow = 'none';
+      mergeShapeEl.style.setProperty('--piece-fill', fill);
+      mergeShapeEl.style.setProperty('--piece-depth', depth);
+      mergeShapeEl.style.setProperty('--piece-shadow', pieceShadowColor(pieceStart.color));
+      mergeShapeEl.style.border = 'none';
+      const key = `${T.x},${T.y},${T.w},${T.h}`;
+      if (key !== tStarKey) {
+        tStarKey = key;
+        if (tStarAnimRaf) cancelAnimationFrame(tStarAnimRaf);
+        const g = api.get();
+        const seed =
+          (prop.targetId != null
+            ? g.board.pieces.find((p) => p.id === prop.targetId)
+            : null) ?? phaseState.lockB;
+        const from = seed
+          ? { x: seed.x, y: seed.y, w: seed.w, h: seed.h }
+          : { ...T };
+        const t0 = performance.now();
+        const tick = (now: number) => {
+          const u = Math.min(1, (now - t0) / 200);
+          const e = 1 - (1 - u) * (1 - u) * (1 - u);
+          applyTStarBox({
+            x: from.x + (T.x - from.x) * e,
+            y: from.y + (T.y - from.y) * e,
+            w: from.w + (T.w - from.w) * e,
+            h: from.h + (T.h - from.h) * e,
+          });
+          if (u < 1) tStarAnimRaf = requestAnimationFrame(tick);
+          else tStarAnimRaf = 0;
+        };
+        tStarAnimRaf = requestAnimationFrame(tick);
       }
     } else {
       mergeShapeEl.style.display = 'none';
+      stopTStarAnim();
     }
   };
 
@@ -1136,6 +1175,7 @@ export function mountGameView(
       unsub();
       cancelAnimationFrame(liftRaf);
       cancelAnimationFrame(dropSnapRaf);
+      stopTStarAnim();
       boardRoot.remove();
       uiRoot.innerHTML = '';
     },
