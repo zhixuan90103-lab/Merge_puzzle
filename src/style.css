@@ -347,6 +347,26 @@ body.debug-game-labels #board-root .piece-axis {
   display: inline;
 }
 
+#board-root .fusion-decor-item {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: visible;
+}
+
+#board-root .fusion-num {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  pointer-events: none;
+  will-change: transform, opacity, left, top;
+}
+
+#board-root .fusion-num-sum {
+  font-size: 20px;
+}
+
 #board-root .piece-value {
   display: inline;
   color: rgba(255, 255, 255, 0.92);
@@ -357,6 +377,10 @@ body.debug-game-labels #board-root .piece-axis {
 #board-root .piece-spawn {
   animation: piece-spawn-pop 0.55s cubic-bezier(0.22, 1.2, 0.36, 1) both;
   z-index: 3;
+}
+
+#board-root .piece-reject {
+  animation: piece-reject-blink 0.9s ease-out;
 }
 
 #board-root .piece-pushed,
@@ -385,6 +409,22 @@ body.debug-game-labels #board-root .piece-axis {
     transform: scale(1);
     opacity: 1;
     filter: brightness(1);
+  }
+}
+
+@keyframes piece-reject-blink {
+  0%,
+  100% {
+    filter: brightness(1);
+    opacity: 1;
+  }
+  28% {
+    filter: brightness(1.12);
+    opacity: 0.72;
+  }
+  56% {
+    filter: brightness(1);
+    opacity: 1;
   }
 }
 

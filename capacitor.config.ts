@@ -6,8 +6,9 @@ import type { CapacitorConfig } from '@capacitor/cli';
  * - base './' on Vite → relative assets for offline WebView
  */
 const config: CapacitorConfig = {
-  appId: 'com.example.portraitwebgpubase',
-  appName: 'Portrait WebGPU Base',
+  // Unique — do not reuse portrait-webgpu-base / com.example.* from other shells
+  appId: 'lab.zhixuan.mergepuzzle',
+  appName: 'Merge Puzzle',
   webDir: 'dist',
   server: {
     androidScheme: 'https',
@@ -15,7 +16,7 @@ const config: CapacitorConfig = {
   ios: {
     contentInset: 'never',
     preferredContentMode: 'mobile',
-    backgroundColor: '#0b1020',
+    backgroundColor: '#74b7ea',
     scrollEnabled: false,
   },
 };

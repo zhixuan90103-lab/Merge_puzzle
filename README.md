@@ -51,4 +51,4 @@ npm run cap:sync
 # Xcode Run
 ```
 
-`appId` 占位：`com.example.portraitwebgpubase`。
+`appId`：`lab.zhixuan.mergepuzzle`（npm 包名 `merge-puzzle`，避免与 portrait-webgpu-base 等底座冲突）。

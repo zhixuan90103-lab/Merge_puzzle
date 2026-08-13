@@ -54,12 +54,14 @@ pointerup → 只认最后一帧提案
 
 | 常量 | 值 | 含义 |
 |------|-----|------|
-| `SNAP_ENTER_DIST` | 1.15 格 | 进入 LOCKED |
-| `SNAP_EXIT_DIST` | 1.65 格 | 回 FREE（磁滞） |
+| `SNAP_ENTER_DIST` | 1.15 格（大块按尺寸加长） | 进入 LOCKED；用**连续**指位重叠，不先贴格 |
+| `LOCK_OVERLAP_ENTER` | 0.22 格 | 连续重叠即锁；优先认叠上的块 |
+| `SNAP_EXIT_DIST` | 进锁 + 0.5 | 回 FREE（磁滞） |
 | `AIM_DEADZONE` | 0.25 格 | 更短不算瞄准 |
 | `AIM_COMMIT` | 0.40 格 | 达此 `playerAim=true` |
-| `SOFT_PULL_LOGIC` | ~0.32 | 提案 ghost 弱拉向 B |
-| `SOFT_PULL_VISUAL` | ~0.22 | 拖动块视觉弱拉 |
+| `SOFT_PULL_LOGIC` | ~0.32 | 提案 ghost 弱拉向 B（仅结算） |
+| `SOFT_PULL_VISUAL` | 0 | 表现层不吸位置 |
+| 融合皮 | 叠加层 | **不改原块**（不藏、不抽厚度、不改层级）；Goo 铺在最上层，只画接缝腰 |
 
 方向采样：
 
@@ -89,7 +91,8 @@ else
 3. **可行性**：`tryMerge(..., forcedTarget: T*)` 必须成功  
 4. 评分：见 §2.2；明确瞄准时惩罚「反方向 + 双侧居中」
 
-预览与提交同一帧提案（禁止松手重算方向）。
+预览与提交同一帧提案（禁止松手重算方向）。  
+锁住同一 B 时：T* 先钉住。一种长法不换；多种角度须新方向比旧方向多伸出约 0.4 格且稳住约 100ms 才换。完全拖开才清框。
 
 ---
 

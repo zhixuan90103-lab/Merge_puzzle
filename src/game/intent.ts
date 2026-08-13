@@ -11,12 +11,15 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** Snap / aim thresholds (cell units). */
 export const SNAP_ENTER_DIST = 1.15;
 export const SNAP_EXIT_DIST = 1.65;
+/** Fractional overlap (continuous) that counts as touching. */
+export const LOCK_OVERLAP_ENTER = 0.22;
+export const LOCK_OVERLAP_EXIT = 0.08;
 export const AIM_DEADZONE = 0.25;
 export const AIM_COMMIT = 0.4;
-/** Logic ghost soft-pull toward B when locked (0–1). */
+/** Logic ghost soft-pull toward B when locked (0–1). Visual pull is off. */
 export const SOFT_PULL_LOGIC = 0.32;
-/** Dragging piece visual soft-pull (0–1). */
-export const SOFT_PULL_VISUAL = 0.22;
+/** Kept for callers; visual seat-snap is disabled (piece follows finger). */
+export const SOFT_PULL_VISUAL = 0;
 
 export type ExpAmount = {
   left: number;
@@ -66,6 +69,22 @@ export function centerDistCells(
   const bcx = B.x + B.w / 2;
   const bcy = B.y + B.h / 2;
   return Math.hypot(gcx - bcx, gcy - bcy);
+}
+
+/** Larger pieces need a longer enter reach than 1.15 cells. */
+export function lockEnterDist(
+  A: Pick<Piece, 'w' | 'h'>,
+  B: Pick<Piece, 'w' | 'h'>,
+): number {
+  const reach = (A.w + B.w) / 4 + (A.h + B.h) / 4;
+  return Math.max(SNAP_ENTER_DIST, reach * 0.72);
+}
+
+export function lockExitDist(
+  A: Pick<Piece, 'w' | 'h'>,
+  B: Pick<Piece, 'w' | 'h'>,
+): number {
+  return lockEnterDist(A, B) + 0.5;
 }
 
 /** Soft magnet: pull ghost partway toward B seat (not flush). */

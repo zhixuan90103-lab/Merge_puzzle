@@ -45,6 +45,8 @@ export type DropProposal = {
   reason: string;
   fingerRect?: Rect;
   mergeTarget?: Rect | null;
+  /** Distinct growth ways (shape × direction). 1 = keep T* sticky. */
+  mergeUniqueWays?: number;
   bilateral?: boolean;
   growDirX?: number;
   growDirY?: number;
@@ -60,6 +62,7 @@ export type ProposeDropOpts = {
   phase?: 'free' | 'locked';
   lockedTargetId?: number;
   playerAim?: boolean;
+  stickyT?: Rect | null;
 };
 
 export type MergeShapePick = {
@@ -68,7 +71,16 @@ export type MergeShapePick = {
   bilateral: boolean;
   dirX: number;
   dirY: number;
+  uniqueWays?: number;
 };
+
+function growthWayKey(c: MergeShapePick): string {
+  return `${c.T.w}x${c.T.h}:${Math.sign(c.dirX)}:${Math.sign(c.dirY)}:${c.bilateral ? 1 : 0}`;
+}
+
+function sameRect(a: Rect, b: Rect): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
 
 const SIDE_EPS = 0.3;
 
@@ -85,11 +97,23 @@ export function nearestMergeable(
     if (!canMergePair(A, p)) continue;
     const dist = centerDistCells(ghost, A, p);
     const overlap = rectOverlapCells(gRect, p);
-    if (
-      !best ||
-      dist < best.dist - 0.01 ||
-      (Math.abs(dist - best.dist) < 0.01 && overlap > best.overlap)
-    ) {
+    if (!best) {
+      best = { target: p, dist, overlap };
+      continue;
+    }
+    const bestTouch = best.overlap >= 0.2;
+    const touch = overlap >= 0.2;
+    // Prefer a piece we are actually overlapping over a closer non-touch.
+    if (touch && !bestTouch) {
+      best = { target: p, dist, overlap };
+      continue;
+    }
+    if (!touch && bestTouch) continue;
+    if (touch && overlap > best.overlap + 0.05) {
+      best = { target: p, dist, overlap };
+      continue;
+    }
+    if (dist < best.dist - 0.01) {
       best = { target: p, dist, overlap };
     }
   }
@@ -163,6 +187,46 @@ function protrusion(a: Rect, b: Rect) {
     up: Math.max(0, b.y - a.y),
     down: Math.max(0, a.y + a.h - (b.y + b.h)),
   };
+}
+
+/** How strongly F sits on the given growth axis (cell units). */
+export function placementAxisStrength(
+  F: Rect,
+  B: Rect,
+  dirX: number,
+  dirY: number,
+): number {
+  const pr = protrusion(F, B);
+  const cdx = F.x + F.w / 2 - (B.x + B.w / 2);
+  const cdy = F.y + F.h / 2 - (B.y + B.h / 2);
+  const sx = (pr.right - pr.left) * 1.5 + cdx;
+  const sy = (pr.down - pr.up) * 1.5 + cdy;
+  if (dirX > 0) return Math.max(0, sx);
+  if (dirX < 0) return Math.max(0, -sx);
+  if (dirY > 0) return Math.max(0, sy);
+  if (dirY < 0) return Math.max(0, -sy);
+  return 0;
+}
+
+/** A hanging off the right of B → grow right. Ignores empty-space bias. */
+export function placementGrowthDir(
+  F: Rect,
+  B: Rect,
+): { dirX: number; dirY: number; confidence: number } {
+  const pr = protrusion(F, B);
+  const cdx = F.x + F.w / 2 - (B.x + B.w / 2);
+  const cdy = F.y + F.h / 2 - (B.y + B.h / 2);
+  const sx = (pr.right - pr.left) * 1.5 + cdx;
+  const sy = (pr.down - pr.up) * 1.5 + cdy;
+  const ax = Math.abs(sx);
+  const ay = Math.abs(sy);
+  if (ax < 0.16 && ay < 0.16) {
+    return { dirX: 0, dirY: 0, confidence: 0 };
+  }
+  if (ax >= ay * 1.04) {
+    return { dirX: Math.sign(sx), dirY: 0, confidence: Math.min(2.4, ax) };
+  }
+  return { dirX: 0, dirY: Math.sign(sy), confidence: Math.min(2.4, ay) };
 }
 
 /** Side / approach intent from finger body + post-lock enter delta. */
@@ -357,7 +421,7 @@ export function findMergeShape(
   F: Rect,
   enterDx: number,
   enterDy: number,
-  opts?: { playerAim?: boolean },
+  opts?: { playerAim?: boolean; stickyT?: Rect | null },
 ): MergeShapePick | null {
   if (!canMergePair(A, B)) return null;
   const newValue = A.value * 2;
@@ -500,29 +564,80 @@ export function findMergeShape(
 
   if (cands.length === 0) return null;
 
-  let pool = cands;
+  cands.sort((a, b) => b.score - a.score);
+  const feasible: MergeShapePick[] = [];
+  const maxCheck = Math.min(cands.length, 48);
+  for (let i = 0; i < maxCheck; i++) {
+    const c = cands[i]!;
+    if (mergeTargetFeasible(board, A, B, G, c.T, enterDx, enterDy)) {
+      feasible.push(c);
+    }
+  }
+  if (feasible.length === 0) return null;
+
+  const groups = new Map<string, MergeShapePick[]>();
+  for (const c of feasible) {
+    const k = growthWayKey(c);
+    const list = groups.get(k);
+    if (list) list.push(c);
+    else groups.set(k, [c]);
+  }
+  const uniqueWays = groups.size;
+  const stickyT = opts?.stickyT ?? null;
+
+  if (stickyT) {
+    const kept = feasible.find((c) => sameRect(c.T, stickyT));
+    if (kept) return { ...kept, uniqueWays };
+  }
+
+  if (uniqueWays === 1) {
+    const only = [...groups.values()][0]!;
+    only.sort((a, b) => b.score - a.score);
+    return { ...only[0]!, uniqueWays };
+  }
+
+  const place = placementGrowthDir(F, B);
+  if (place.confidence >= 0.22) {
+    const aligned = feasible.filter((c) => {
+      if (c.bilateral) return false;
+      if (place.dirX !== 0) return Math.sign(c.dirX) === place.dirX;
+      if (place.dirY !== 0) return Math.sign(c.dirY) === place.dirY;
+      return false;
+    });
+    if (aligned.length > 0) {
+      aligned.sort((a, b) => b.score - a.score);
+      return { ...aligned[0]!, uniqueWays };
+    }
+  }
+
+  for (const c of feasible) {
+    const exp = expandDirs(B, c.T);
+    c.score += scoreIntentFn(
+      side,
+      true,
+      denseBoard,
+      c.dirX,
+      c.dirY,
+      c.bilateral,
+      exp,
+    );
+  }
   if (playerAim) {
     const confNeed = denseBoard ? 0.28 : 0.4;
     const strong = side.confidence >= confNeed && !side.bilateralHint;
     if (strong) {
-      const aligned = cands.filter((c) => {
+      const aligned = feasible.filter((c) => {
         const exp = expandDirs(B, c.T);
         return matchesSideIntent(side, c.dirX, c.dirY, c.bilateral, exp);
       });
-      if (aligned.length > 0) pool = aligned;
+      if (aligned.length > 0) {
+        aligned.sort((a, b) => b.score - a.score);
+        return { ...aligned[0]!, uniqueWays };
+      }
     }
   }
-
-  pool.sort((a, b) => b.score - a.score);
-
-  const maxCheck = Math.min(pool.length, 24);
-  for (let i = 0; i < maxCheck; i++) {
-    const c = pool[i]!;
-    if (mergeTargetFeasible(board, A, B, G, c.T, enterDx, enterDy)) {
-      return c;
-    }
-  }
-  return null;
+  feasible.sort((a, b) => b.score - a.score);
+  return { ...feasible[0]!, uniqueWays };
 }
 
 function mergeTargetFeasible(
@@ -619,23 +734,27 @@ export function proposeDrop(
   }
 
   const newValue = A.value * 2;
-  for (const p of board.pieces) {
-    const ov = rectOverlapCells(G, p);
-    if (ov <= 0) continue;
-    if (merge && p.id === merge.target.id) continue;
-    if (p.color === A.color && p.value === A.value && canMergePair(A, p)) continue;
-    if (merge && p.value <= newValue) continue;
-    return {
-      kind: 'illegal',
-      ghost,
-      targetId: null,
-      overlapCells: ov,
-      reason: '格子被占用',
-      fingerRect: F,
-      mergeTarget: null,
-      locked: phase === 'locked',
-      playerAim,
-    };
+  // Locked on a merge pair: occupancy is resolved by tryMerge / T*.
+  // Do not drop to illegal here or the purple preview (and commit) flicker off.
+  if (!(phase === 'locked' && merge)) {
+    for (const p of board.pieces) {
+      const ov = rectOverlapCells(G, p);
+      if (ov <= 0) continue;
+      if (merge && p.id === merge.target.id) continue;
+      if (p.color === A.color && p.value === A.value && canMergePair(A, p)) continue;
+      if (merge && p.value <= newValue) continue;
+      return {
+        kind: 'illegal',
+        ghost,
+        targetId: null,
+        overlapCells: ov,
+        reason: '格子被占用',
+        fingerRect: F,
+        mergeTarget: null,
+        locked: phase === 'locked',
+        playerAim,
+      };
+    }
   }
 
   if (merge) {
@@ -647,7 +766,10 @@ export function proposeDrop(
       F,
       enterDx,
       enterDy,
-      { playerAim: phase === 'locked' && playerAim },
+      {
+        playerAim: phase === 'locked' && playerAim,
+        stickyT: phase === 'locked' ? opts?.stickyT ?? null : null,
+      },
     );
     if (pick) {
       const aimTag =
@@ -666,6 +788,7 @@ export function proposeDrop(
           : `可合 → ${A.value * 2}${aimTag}`,
         fingerRect: F,
         mergeTarget: pick.T,
+        mergeUniqueWays: pick.uniqueWays ?? 0,
         bilateral: pick.bilateral,
         growDirX: pick.dirX,
         growDirY: pick.dirY,

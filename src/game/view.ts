@@ -11,8 +11,10 @@ import {
   fingerRectFromAim,
   hitTestPiece,
   nearestMergeable,
+  placementAxisStrength,
+  placementGrowthDir,
 } from './dropResolve';
-import { lockAimCombined, SOFT_PULL_VISUAL } from './intent';
+import { lockAimCombined } from './intent';
 import { proposalForLifted, type DropProposal, type GameModel } from './game';
 import { pieceDepthColor, pieceFillColor, pieceShadowColor, shapeAxis } from './shapes';
 import type { Piece } from './types';
@@ -123,6 +125,254 @@ export function mountGameView(
     background:rgba(183,148,246,0.1);
   `;
   boardRoot.appendChild(mergeShapeEl);
+
+  /**
+   * Goo overlay on top of everything. Pieces stay as-is.
+   * No mask/clip — those were eating the waist.
+   */
+  /** Smaller than piece 15px — blur adds extra corner rounding. */
+  const FUSION_RX = 7;
+  const fusionSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  fusionSvg.setAttribute('class', 'fusion-goo');
+  fusionSvg.setAttribute('width', String(boardLayout.size));
+  fusionSvg.setAttribute('height', String(boardLayout.size));
+  fusionSvg.style.cssText = `
+    position:absolute;left:0;top:0;width:100%;height:100%;
+    overflow:visible;pointer-events:none;z-index:9999;display:none;
+  `;
+  fusionSvg.innerHTML = `
+    <defs>
+      <filter id="piece-goo" color-interpolation-filters="sRGB"
+        filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
+        x="-80" y="-80" width="${boardLayout.size + 160}" height="${boardLayout.size + 160}">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur"/>
+        <feColorMatrix in="blur" type="matrix"
+          values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 54 -32" result="goo"/>
+      </filter>
+      <filter id="goo-shade" color-interpolation-filters="sRGB"
+        filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
+        x="-80" y="-80" width="${boardLayout.size + 160}" height="${boardLayout.size + 160}">
+        <feOffset in="SourceAlpha" dx="1.2" dy="3.2" result="off"/>
+        <feGaussianBlur in="off" stdDeviation="2.4" result="shBlur"/>
+        <feColorMatrix in="shBlur" type="matrix"
+          values="0 0 0 0 0.16  0 0 0 0 0.17  0 0 0 0 0.20  0 0 0 0.28 0" result="shadow"/>
+        <feMerge>
+          <feMergeNode in="shadow"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#goo-shade)">
+      <g filter="url(#piece-goo)">
+        <rect id="fusion-b-depth" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
+        <rect id="fusion-a-depth" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
+      </g>
+      <g filter="url(#piece-goo)">
+        <rect id="fusion-b-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
+        <rect id="fusion-a-blob" rx="${FUSION_RX}" ry="${FUSION_RX}"/>
+      </g>
+    </g>
+  `;
+  boardRoot.appendChild(fusionSvg);
+
+  const fusionDecor = document.createElement('div');
+  fusionDecor.className = 'fusion-decor';
+  fusionDecor.style.cssText = `
+    position:absolute;left:0;top:0;width:100%;height:100%;
+    pointer-events:none;z-index:10001;display:none;
+  `;
+  const fusionShineA = document.createElement('div');
+  fusionShineA.className = 'fusion-decor-item';
+  fusionShineA.innerHTML = PIECE_SHINE;
+  const makeNum = () => {
+    const el = document.createElement('span');
+    el.className = 'fusion-num piece-value';
+    fusionDecor.appendChild(el);
+    return el;
+  };
+  fusionDecor.appendChild(fusionShineA);
+  const fusionNumA = makeNum();
+  const fusionNumB = makeNum();
+  const fusionNumSum = makeNum();
+  fusionNumSum.classList.add('fusion-num-sum');
+  boardRoot.appendChild(fusionDecor);
+
+  const placeBox = (
+    el: HTMLElement,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+  ) => {
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+  };
+
+  const placeNum = (
+    el: HTMLElement,
+    cx: number,
+    cy: number,
+    text: string,
+    opacity: number,
+    scale: number,
+  ) => {
+    el.textContent = text;
+    el.style.left = `${cx}px`;
+    el.style.top = `${cy}px`;
+    el.style.opacity = String(opacity);
+    el.style.transform = `translate(-50%,-50%) scale(${scale})`;
+  };
+
+  const fusionABlob = fusionSvg.querySelector('#fusion-a-blob') as SVGRectElement;
+  const fusionBBlob = fusionSvg.querySelector('#fusion-b-blob') as SVGRectElement;
+  const fusionADepth = fusionSvg.querySelector('#fusion-a-depth') as SVGRectElement;
+  const fusionBDepth = fusionSvg.querySelector('#fusion-b-depth') as SVGRectElement;
+
+  const setSvgRect = (
+    el: SVGRectElement,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    fill: string,
+  ) => {
+    el.setAttribute('x', String(x));
+    el.setAttribute('y', String(y));
+    el.setAttribute('width', String(Math.max(0, w)));
+    el.setAttribute('height', String(Math.max(0, h)));
+    el.setAttribute('fill', fill);
+  };
+
+  let fusionOn = false;
+  let fusionNumPhase: 'off' | 'adding' | 'sum' = 'off';
+  let fusionNumT0 = 0;
+  let fusionNumRaf = 0;
+  let fusionNumValue = 1;
+  const fusionNumFromA = { x: 0, y: 0 };
+  const fusionNumFromB = { x: 0, y: 0 };
+  const fusionNumMid = { x: 0, y: 0 };
+
+  const easeOut = (t: number) => {
+    const u = 1 - Math.max(0, Math.min(1, t));
+    return 1 - u * u * u;
+  };
+
+  const tickFusionNums = (now: number) => {
+    fusionNumRaf = 0;
+    const mx = fusionNumMid.x;
+    const my = fusionNumMid.y;
+    if (fusionNumPhase === 'adding') {
+      const t = Math.min(1, (now - fusionNumT0) / 240);
+      const u = easeOut(t);
+      placeNum(
+        fusionNumA,
+        fusionNumFromA.x + (mx - fusionNumFromA.x) * u,
+        fusionNumFromA.y + (my - fusionNumFromA.y) * u,
+        String(fusionNumValue),
+        1 - u,
+        1 - 0.22 * u,
+      );
+      placeNum(
+        fusionNumB,
+        fusionNumFromB.x + (mx - fusionNumFromB.x) * u,
+        fusionNumFromB.y + (my - fusionNumFromB.y) * u,
+        String(fusionNumValue),
+        1 - u,
+        1 - 0.22 * u,
+      );
+      placeNum(
+        fusionNumSum,
+        mx,
+        my,
+        String(fusionNumValue * 2),
+        u,
+        0.78 + 0.32 * u,
+      );
+      if (t >= 1) {
+        fusionNumPhase = 'sum';
+        placeNum(fusionNumA, mx, my, '', 0, 1);
+        placeNum(fusionNumB, mx, my, '', 0, 1);
+        placeNum(fusionNumSum, mx, my, String(fusionNumValue * 2), 1, 1);
+        return;
+      }
+      fusionNumRaf = requestAnimationFrame(tickFusionNums);
+      return;
+    }
+    if (fusionNumPhase === 'sum') {
+      placeNum(fusionNumA, mx, my, '', 0, 1);
+      placeNum(fusionNumB, mx, my, '', 0, 1);
+      placeNum(fusionNumSum, mx, my, String(fusionNumValue * 2), 1, 1);
+    }
+  };
+
+  const hideFusion = () => {
+    fusionOn = false;
+    fusionNumPhase = 'off';
+    if (fusionNumRaf) cancelAnimationFrame(fusionNumRaf);
+    fusionNumRaf = 0;
+    fusionSvg.style.display = 'none';
+    fusionDecor.style.display = 'none';
+  };
+
+  const paintFusion = (
+    aLeft: number,
+    aTop: number,
+    aW: number,
+    aH: number,
+    B: { x: number; y: number; w: number; h: number },
+    color: number,
+    value: number,
+    aScale: number,
+  ) => {
+    const fill = pieceFillColor(color, value);
+    const depth = pieceDepthColor(color, value);
+    const bLeft = B.x * cell + CELL_INSET;
+    const bTop = B.y * cell + CELL_INSET;
+    const bW = B.w * cell - CELL_INSET * 2;
+    const bH = B.h * cell - CELL_INSET * 2;
+    const aw = aW * aScale;
+    const ah = aH * aScale;
+    const ax = aLeft + aW / 2 - aw / 2;
+    const ay = aTop + aH / 2 - ah / 2;
+    const grow = 3;
+    setSvgRect(fusionBDepth, bLeft - grow + 1, bTop - grow + 3, bW + grow * 2, bH + grow * 2 + 2, depth);
+    setSvgRect(fusionADepth, ax - grow + 1, ay - grow + 3, aw + grow * 2, ah + grow * 2 + 2, depth);
+    setSvgRect(fusionBBlob, bLeft - grow, bTop - grow, bW + grow * 2, bH + grow * 2, fill);
+    setSvgRect(fusionABlob, ax - grow, ay - grow, aw + grow * 2, ah + grow * 2, fill);
+
+    placeBox(fusionShineA, ax, ay, aw, ah);
+    fusionShineA.style.setProperty(
+      '--shine-scale',
+      aw >= cell * 2 - 4 && ah >= cell * 2 - 4 ? '1' : '0.72',
+    );
+
+    const acx = ax + aw / 2;
+    const acy = ay + ah / 2;
+    const bcx = bLeft + bW / 2;
+    const bcy = bTop + bH / 2;
+    fusionNumMid.x = (acx + bcx) / 2;
+    fusionNumMid.y = (acy + bcy) / 2;
+    fusionNumValue = value;
+
+    if (!fusionOn) {
+      fusionNumFromA.x = acx;
+      fusionNumFromA.y = acy;
+      fusionNumFromB.x = bcx;
+      fusionNumFromB.y = bcy;
+      fusionNumPhase = 'adding';
+      fusionNumT0 = performance.now();
+      if (fusionNumRaf) cancelAnimationFrame(fusionNumRaf);
+      fusionNumRaf = requestAnimationFrame(tickFusionNums);
+    } else if (fusionNumPhase === 'sum') {
+      tickFusionNums(performance.now());
+    }
+
+    fusionSvg.style.display = 'block';
+    fusionDecor.style.display = 'block';
+    fusionOn = true;
+  };
 
   uiRoot.innerHTML = '';
   const header = document.createElement('header');
@@ -341,6 +591,21 @@ export function mountGameView(
   };
 
   let lastStatusKey = '';
+  let lastRejectNonce = -1;
+
+  const playRejectBlink = (ids: number[]) => {
+    const want = new Set(ids);
+    for (const [id, el] of pieceEls) {
+      if (!want.has(id)) {
+        el.classList.remove('piece-reject');
+        continue;
+      }
+      if (el.style.display === 'none') el.style.display = 'flex';
+      el.classList.remove('piece-reject');
+      void el.offsetWidth;
+      el.classList.add('piece-reject');
+    }
+  };
 
   const render = (g: GameModel) => {
     const motionOnly = !!(g.visualPieces && g.animating);
@@ -349,7 +614,7 @@ export function mountGameView(
     } else {
       syncPieces(g.board.pieces, g.spawnFlashIds, false);
     }
-    // Hide board piece if lifted (shown in drag layer)
+    // Unhide before blink — animation on display:none is skipped
     if (g.lifted) {
       const el = pieceEls.get(g.lifted.id);
       if (el) el.style.display = 'none';
@@ -358,6 +623,11 @@ export function mountGameView(
         if (el.style.display === 'none') el.style.display = 'flex';
       }
     }
+    if (g.rejectNonce !== lastRejectNonce) {
+      lastRejectNonce = g.rejectNonce;
+      playRejectBlink(g.rejectFlashIds);
+    }
+
 
     // Avoid layout thrash: status text only when changed
     const phase =
@@ -423,31 +693,14 @@ export function mountGameView(
     return aimToGhost(a.x, a.y, cell, pieceStart.w, pieceStart.h);
   };
 
-  const paintProposal = (prop: DropProposal | null, A: { w: number; h: number }) => {
+  const paintProposal = (prop: DropProposal | null, _A: { w: number; h: number }) => {
     if (!prop) {
       proposalEl.style.display = 'none';
       targetRingEl.style.display = 'none';
       mergeShapeEl.style.display = 'none';
       return;
     }
-    proposalEl.style.display = 'block';
-    proposalEl.style.left = `${prop.ghost.x * cell + CELL_INSET}px`;
-    proposalEl.style.top = `${prop.ghost.y * cell + CELL_INSET}px`;
-    proposalEl.style.width = `${A.w * cell - CELL_INSET * 2}px`;
-    proposalEl.style.height = `${A.h * cell - CELL_INSET * 2}px`;
-    // Solid border for snap accuracy (FINDINGS: outline > soft shadow)
-    proposalEl.style.borderStyle = 'solid';
-    // kind `move` = return home (cancel); free place is disabled
-    if (prop.kind === 'move') {
-      proposalEl.style.background = 'rgba(132, 136, 150, 0.12)';
-      proposalEl.style.borderColor = 'rgba(120, 125, 140, 0.45)';
-    } else if (prop.kind === 'merge') {
-      proposalEl.style.background = 'rgba(94, 200, 255, 0.18)';
-      proposalEl.style.borderColor = 'rgba(94, 200, 255, 0.92)';
-    } else {
-      proposalEl.style.background = 'rgba(255, 139, 122, 0.14)';
-      proposalEl.style.borderColor = 'rgba(255, 139, 122, 0.68)';
-    }
+    proposalEl.style.display = 'none';
 
     if (prop.kind === 'merge' && prop.targetId != null) {
       const g = api.get();
@@ -496,9 +749,26 @@ export function mountGameView(
 
   /** FREE = pick B; LOCKED = weak magnet + micro-aim (docs/DESIGN_DRAG_MERGE.md) */
   let phaseState: DragPhaseState = initialDragPhase();
+  let stickyMerge: {
+    targetId: number;
+    T: { x: number; y: number; w: number; h: number };
+    bilateral: boolean;
+    dirX: number;
+    dirY: number;
+  } | null = null;
+  let pendingSwitch: {
+    dirX: number;
+    dirY: number;
+    since: number;
+  } | null = null;
+
+  const DIR_SWITCH_MARGIN = 0.4;
+  const DIR_SWITCH_DWELL_MS = 100;
 
   const resetDragPhase = () => {
     phaseState = resetPhaseState();
+    stickyMerge = null;
+    pendingSwitch = null;
   };
 
   const updateProposalFromDesign = (designX: number, designY: number) => {
@@ -515,10 +785,11 @@ export function mountGameView(
     const aimCellY = a.y / cell;
     const F = fingerRectFromAim(aimCellX, aimCellY, pieceStart.w, pieceStart.h);
 
-    const nearest = nearestMergeable(g.board, A, raw);
+    const nearest = nearestMergeable(g.board, A, { x: F.x, y: F.y });
     const stepped = stepDragPhase(phaseState, {
       A,
       rawGhost: raw,
+      fingerRect: F,
       designX,
       designY,
       board: g.board,
@@ -543,15 +814,51 @@ export function mountGameView(
       const fcy = F.y + F.h / 2;
       const placeDdx = fcx - (B.x + B.w / 2);
       const placeDdy = fcy - (B.y + B.h / 2);
-      const aim = lockAimCombined(
-        slideDdx,
-        slideDdy,
-        -placeDdx,
-        -placeDdy,
-      );
+      const aim = lockAimCombined(slideDdx, slideDdy, placeDdx, placeDdy);
       enterDx = aim.enterDx;
       enterDy = aim.enterDy;
       playerAim = aim.playerAim;
+    }
+
+    if (
+      phase !== 'locked' ||
+      phaseState.lockedTargetId == null ||
+      (stickyMerge != null && stickyMerge.targetId !== phaseState.lockedTargetId)
+    ) {
+      stickyMerge = null;
+      pendingSwitch = null;
+    }
+
+    let releaseSticky = false;
+    if (phase === 'locked' && stickyMerge && phaseState.lockB) {
+      const wish = placementGrowthDir(F, phaseState.lockB);
+      const sameDir =
+        wish.dirX === stickyMerge.dirX && wish.dirY === stickyMerge.dirY;
+      if (!sameDir && wish.confidence >= 0.22) {
+        const cur = placementAxisStrength(
+          F,
+          phaseState.lockB,
+          stickyMerge.dirX,
+          stickyMerge.dirY,
+        );
+        const nxt = placementAxisStrength(F, phaseState.lockB, wish.dirX, wish.dirY);
+        if (nxt >= cur + DIR_SWITCH_MARGIN) {
+          const now = performance.now();
+          if (
+            !pendingSwitch ||
+            pendingSwitch.dirX !== wish.dirX ||
+            pendingSwitch.dirY !== wish.dirY
+          ) {
+            pendingSwitch = { dirX: wish.dirX, dirY: wish.dirY, since: now };
+          } else if (now - pendingSwitch.since >= DIR_SWITCH_DWELL_MS) {
+            releaseSticky = true;
+          }
+        } else {
+          pendingSwitch = null;
+        }
+      } else {
+        pendingSwitch = null;
+      }
     }
 
     lastProposal = proposalForLifted(g.board, A, raw, {
@@ -563,7 +870,49 @@ export function mountGameView(
       lockedTargetId:
         phase === 'locked' ? phaseState.lockedTargetId ?? undefined : undefined,
       playerAim: phase === 'locked' && playerAim,
+      stickyT:
+        phase === 'locked' &&
+        stickyMerge?.targetId === phaseState.lockedTargetId &&
+        !releaseSticky
+          ? stickyMerge.T
+          : null,
     });
+
+    if (phase === 'locked' && phaseState.lockedTargetId != null) {
+      if (
+        lastProposal.kind === 'merge' &&
+        lastProposal.mergeTarget &&
+        lastProposal.targetId === phaseState.lockedTargetId
+      ) {
+        if (!stickyMerge || releaseSticky) {
+          stickyMerge = {
+            targetId: lastProposal.targetId,
+            T: lastProposal.mergeTarget,
+            bilateral: lastProposal.bilateral ?? false,
+            dirX: lastProposal.growDirX ?? 0,
+            dirY: lastProposal.growDirY ?? 0,
+          };
+          pendingSwitch = null;
+        }
+      }
+      if (stickyMerge) {
+        lastProposal = {
+          ...lastProposal,
+          kind: 'merge',
+          targetId: stickyMerge.targetId,
+          mergeTarget: stickyMerge.T,
+          mergeUniqueWays: lastProposal.mergeUniqueWays ?? 1,
+          bilateral: stickyMerge.bilateral,
+          growDirX: stickyMerge.dirX,
+          growDirY: stickyMerge.dirY,
+          locked: true,
+          reason: lastProposal.reason || '可合',
+        };
+      }
+    } else {
+      stickyMerge = null;
+      pendingSwitch = null;
+    }
     paintProposal(lastProposal, A);
   };
 
@@ -575,23 +924,33 @@ export function mountGameView(
   ) => {
     if (!dragEl) return;
     const a = aimBoardLocal(designX, designY);
-    let left = a.x - (pieceStart.w * cell) / 2;
-    let top = a.y - (pieceStart.h * cell) / 2;
-    if (phaseState.phase === 'locked' && phaseState.lockB) {
-      const bx = phaseState.lockB.x * cell + CELL_INSET;
-      const by = phaseState.lockB.y * cell + CELL_INSET;
-      left = left + (bx - left) * SOFT_PULL_VISUAL;
-      top = top + (by - top) * SOFT_PULL_VISUAL;
-    }
+    const aW = pieceStart.w * cell - CELL_INSET * 2;
+    const aH = pieceStart.h * cell - CELL_INSET * 2;
+    const left = a.x - (pieceStart.w * cell) / 2;
+    const top = a.y - (pieceStart.h * cell) / 2;
     dragEl.style.left = `${left}px`;
     dragEl.style.top = `${top}px`;
-    dragEl.style.width = `${pieceStart.w * cell - CELL_INSET * 2}px`;
-    dragEl.style.height = `${pieceStart.h * cell - CELL_INSET * 2}px`;
+    dragEl.style.width = `${aW}px`;
+    dragEl.style.height = `${aH}px`;
     dragEl.style.transform = `scale(${scale})`;
     dragEl.style.boxShadow =
-      phaseState.phase === 'locked'
-        ? '0 14px 24px rgba(var(--piece-shadow),0.28), 0 0 0 2px rgba(94,200,255,0.24)'
-        : '0 16px 28px rgba(var(--piece-shadow),0.26), 0 0 0 1px rgba(255,255,255,0.32)';
+      '0 16px 28px rgba(var(--piece-shadow),0.26), 0 0 0 1px rgba(255,255,255,0.32)';
+
+    const canFuse = phaseState.phase === 'locked' && phaseState.lockB != null;
+    if (canFuse && phaseState.lockB) {
+      paintFusion(
+        left,
+        top,
+        aW,
+        aH,
+        phaseState.lockB,
+        pieceStart.color,
+        pieceStart.value,
+        scale,
+      );
+    } else if (fusionOn) {
+      hideFusion();
+    }
   };
 
   const animateLift = (from: number, to: number, ms: number, onDone?: () => void) => {
@@ -610,6 +969,7 @@ export function mountGameView(
   };
 
   let lastDesign = { x: 0, y: 0 };
+  let liftDesign = { x: 0, y: 0 };
   let pointerId = -1;
 
   const onPointerDown = (e: PointerEvent) => {
@@ -646,6 +1006,7 @@ export function mountGameView(
       id: hit.id,
     };
     lastDesign = d;
+    liftDesign = d;
     resetDragPhase();
 
     dragEl = document.createElement('div');
@@ -699,8 +1060,11 @@ export function mountGameView(
     const d = toDesign(e.clientX, e.clientY) ?? lastDesign;
     // CRITICAL: 松手只认最后一帧预览，禁止再 proposeDrop
     const frozenProp = lastProposal;
-    const cellPos =
-      frozenProp?.ghost ?? rawGhostFromDesign(d.x, d.y);
+    const illegalHome =
+      frozenProp?.kind === 'illegal' || frozenProp?.kind === 'move';
+    const cellPos = illegalHome
+      ? { x: pieceStart.x, y: pieceStart.y }
+      : frozenProp?.ghost ?? rawGhostFromDesign(d.x, d.y);
     let designDx = (frozenProp?.growDirX ?? 0) * 40;
     let designDy = (frozenProp?.growDirY ?? 0) * 40;
     if (
@@ -712,6 +1076,7 @@ export function mountGameView(
       designDy = d.y - phaseState.lockFingerDesign.y;
     }
     resetDragPhase();
+    hideFusion();
 
     // Snap floating piece to proposal rect, then commit frozen frame
     const t0 = performance.now();
@@ -745,6 +1110,11 @@ export function mountGameView(
       lastProposal = null;
       // Commit the frozen preview frame only (not a recomputed one)
       api.dropAt(cellPos, designDx, designDy, frozenProp);
+      const travelled =
+        Math.hypot(d.x - liftDesign.x, d.y - liftDesign.y) > 18;
+      if (frozenProp?.kind === 'move' && travelled) {
+        playRejectBlink([pieceStart.id]);
+      }
     };
     cancelAnimationFrame(dropSnapRaf);
     dropSnapRaf = requestAnimationFrame(tick);

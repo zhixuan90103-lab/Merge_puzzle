@@ -1,9 +1,9 @@
 {
-  "name": "portrait-webgpu-base",
-  "version": "1.0.0",
+  "name": "merge-puzzle",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
-  "description": "Robust portrait shell: TS + Three WebGPU + Vite + Capacitor iOS. Merges niantu adapt + three-webgpu-cap-shell packaging/docs/haptics workflow.",
+  "description": "Merge Puzzle: same-color merge, push exile, mono full-board clear. TS + Vite + Capacitor iOS.",
   "scripts": {
     "dev": "vite --host --port 5200",
     "build": "tsc --noEmit && vite build",

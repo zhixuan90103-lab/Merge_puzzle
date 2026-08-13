@@ -3,9 +3,11 @@
  */
 import {
   centerDistCells,
+  lockEnterDist,
+  lockExitDist,
   rectOverlapCells,
-  SNAP_ENTER_DIST,
-  SNAP_EXIT_DIST,
+  LOCK_OVERLAP_ENTER,
+  LOCK_OVERLAP_EXIT,
 } from './intent';
 import type { BoardState, Piece } from './types';
 
@@ -51,6 +53,8 @@ export function stepDragPhase(
   opts: {
     A: Piece;
     rawGhost: { x: number; y: number };
+    /** Continuous finger rect (preferred for lock). */
+    fingerRect?: { x: number; y: number; w: number; h: number };
     designX: number;
     designY: number;
     board: BoardState;
@@ -58,11 +62,18 @@ export function stepDragPhase(
   },
 ): { state: DragPhaseState; haptic: HapticCue } {
   const { A, rawGhost, designX, designY, board, nearest } = opts;
+  const probe = opts.fingerRect ?? {
+    x: rawGhost.x,
+    y: rawGhost.y,
+    w: A.w,
+    h: A.h,
+  };
 
   if (state.phase === 'free') {
     if (
       nearest &&
-      (nearest.overlap >= 1 || nearest.dist <= SNAP_ENTER_DIST)
+      (nearest.overlap >= LOCK_OVERLAP_ENTER ||
+        nearest.dist <= lockEnterDist(A, nearest.target))
     ) {
       return {
         state: {
@@ -91,12 +102,9 @@ export function stepDragPhase(
     return { state: resetDragPhase(), haptic: 'detach' };
   }
 
-  const dist = centerDistCells(rawGhost, A, B);
-  const ov = rectOverlapCells(
-    { x: rawGhost.x, y: rawGhost.y, w: A.w, h: A.h },
-    B,
-  );
-  if (dist > SNAP_EXIT_DIST && ov < 1) {
+  const dist = centerDistCells({ x: probe.x, y: probe.y }, A, B);
+  const ov = rectOverlapCells(probe, B);
+  if (dist > lockExitDist(A, B) && ov < LOCK_OVERLAP_EXIT) {
     return { state: resetDragPhase(), haptic: 'detach' };
   }
 

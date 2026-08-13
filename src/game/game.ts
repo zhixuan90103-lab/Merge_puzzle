@@ -22,6 +22,10 @@ export type GameModel = {
   lifted: Piece | null;
   lastSpawn: boolean;
   spawnFlashIds: number[];
+  /** Piece ids to blink after an illegal drop returns home. */
+  rejectFlashIds: number[];
+  /** Bumps every bounce so the same piece can blink again. */
+  rejectNonce: number;
   animating: boolean;
   /** When set, view renders these instead of board.pieces (timeline) */
   visualPieces: VisualPiece[] | null;
@@ -55,6 +59,8 @@ export function createGame() {
     lifted: null,
     lastSpawn: false,
     spawnFlashIds: [],
+    rejectFlashIds: [],
+    rejectNonce: 0,
     animating: false,
     visualPieces: null,
   };
@@ -102,6 +108,8 @@ export function createGame() {
       lifted: null,
       message,
       spawnFlashIds: [],
+      rejectFlashIds: [A.id],
+      rejectNonce: model.rejectNonce + 1,
       visualPieces: null,
     });
   };
