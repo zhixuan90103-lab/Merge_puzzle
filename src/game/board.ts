@@ -16,7 +16,29 @@ export function cloneBoard(board: BoardState): BoardState {
 export function normalizePiece(p: Piece): Piece {
   const color =
     typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
-  return { ...p, color };
+  const value = Number.isFinite(p.value) ? Math.max(1, Math.round(p.value)) : 1;
+  return { ...p, color, value };
+}
+
+/** How many unit cells of this rect still sit on the 8×8. */
+export function countOnBoardCells(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): number {
+  let n = 0;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.ceil(x + w - 1e-9);
+  const y1 = Math.ceil(y + h - 1e-9);
+  for (let cy = y0; cy < y1; cy++) {
+    for (let cx = x0; cx < x1; cx++) {
+      if (!inBounds(cx, cy)) continue;
+      if (cx + 1 > x && cx < x + w && cy + 1 > y && cy < y + h) n++;
+    }
+  }
+  return n;
 }
 
 export function pieceCells(p: Piece): Cell[] {
@@ -43,14 +65,51 @@ export function clipRectToBoard(
   w: number,
   h: number,
 ): { x: number; y: number; w: number; h: number; value: number } | null {
+  const ix = Math.round(x);
+  const iy = Math.round(y);
+  const iw = Math.max(1, Math.round(w));
+  const ih = Math.max(1, Math.round(h));
+  const x0 = Math.max(0, ix);
+  const y0 = Math.max(0, iy);
+  const x1 = Math.min(GRID_SIZE, ix + iw);
+  const y1 = Math.min(GRID_SIZE, iy + ih);
+  const nw = x1 - x0;
+  const nh = y1 - y0;
+  if (nw <= 0 || nh <= 0) return null;
+  return { x: x0, y: y0, w: nw, h: nh, value: nw * nh };
+}
+
+/** Visual clip: keep float geometry, integer remaining-cell value. */
+export function clipVisualToBoard(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): { x: number; y: number; w: number; h: number; value: number } | null {
   const x0 = Math.max(0, x);
   const y0 = Math.max(0, y);
   const x1 = Math.min(GRID_SIZE, x + w);
   const y1 = Math.min(GRID_SIZE, y + h);
   const nw = x1 - x0;
   const nh = y1 - y0;
-  if (nw <= 0 || nh <= 0) return null;
-  return { x: x0, y: y0, w: nw, h: nh, value: nw * nh };
+  if (nw <= 1e-6 || nh <= 1e-6) return null;
+  return {
+    x: x0,
+    y: y0,
+    w: nw,
+    h: nh,
+    value: Math.max(1, countOnBoardCells(x, y, w, h)),
+  };
+}
+
+/** Clip / drop every piece that sits off the 8×8. */
+export function settleBoardPieces(board: BoardState): void {
+  for (const p of [...board.pieces]) {
+    if (rectInBounds(p.x, p.y, p.w, p.h)) continue;
+    const clipped = clipPieceToBoard(p);
+    if (!clipped) removePiece(board, p.id);
+    else upsertPiece(board, clipped);
+  }
 }
 
 /** Clip a piece to the board; null if fully off. Color is never changed. */
@@ -129,12 +188,14 @@ export function pieceCenter(p: Piece): { x: number; y: number } {
 /** Total occupied cells (value = area). Full board ⇒ 64. */
 export function boardArea(board: BoardState): number {
   let n = 0;
-  for (const p of board.pieces) n += p.value;
+  for (const p of board.pieces) {
+    n += countOnBoardCells(p.x, p.y, p.w, p.h);
+  }
   return n;
 }
 
 export function emptyCellCount(board: BoardState): number {
-  return GRID_SIZE * GRID_SIZE - board.pieces.reduce((s, p) => s + p.w * p.h, 0);
+  return GRID_SIZE * GRID_SIZE - boardArea(board);
 }
 
 /** Stable state invariant: no empty cells. */

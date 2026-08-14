@@ -2,6 +2,7 @@
  * Fill enter: from the emptied rim, along a clear lane, as a rigid train.
  * One clock per clip — pieces never overtake.
  */
+import { tweaks } from './tweaks';
 import type { Piece } from './types';
 import { GRID_SIZE } from './types';
 
@@ -23,9 +24,9 @@ export type SpawnEnterPlan = {
   duration: number;
 };
 
-const PAD = 0.2;
-const MS_PER_CELL = 48;
-const MS_MIN = 200;
+const pad = () => tweaks.spawnPad;
+const msPerCell = () => tweaks.spawnMsPerCell;
+const msMin = () => Math.max(200, tweaks.spawnMsPerCell * 4);
 
 function overlap(
   ax: number,
@@ -41,10 +42,11 @@ function overlap(
 }
 
 function probeStart(p: Piece, s: Side): { x: number; y: number } {
-  if (s.sx < 0) return { x: -p.w - PAD, y: p.y };
-  if (s.sx > 0) return { x: GRID_SIZE + PAD, y: p.y };
-  if (s.sy < 0) return { x: p.x, y: -p.h - PAD };
-  return { x: p.x, y: GRID_SIZE + PAD };
+  const d = pad();
+  if (s.sx < 0) return { x: -p.w - d, y: p.y };
+  if (s.sx > 0) return { x: GRID_SIZE + d, y: p.y };
+  if (s.sy < 0) return { x: p.x, y: -p.h - d };
+  return { x: p.x, y: GRID_SIZE + d };
 }
 
 function laneClear(
@@ -99,21 +101,22 @@ function laneKey(p: Piece, s: Side): string {
 
 /** Shift a dest-group so its leading edge sits just outside the rim. */
 function groupShift(ps: Piece[], s: Side): { dx: number; dy: number } {
+  const d = pad();
   if (s.sy < 0) {
     const minY = Math.min(...ps.map((p) => p.y));
-    return { dx: 0, dy: -PAD - minY };
+    return { dx: 0, dy: -d - minY };
   }
   if (s.sy > 0) {
     const maxY = Math.max(...ps.map((p) => p.y + p.h));
-    return { dx: 0, dy: GRID_SIZE + PAD - maxY };
+    return { dx: 0, dy: GRID_SIZE + d - maxY };
   }
   if (s.sx < 0) {
     const minX = Math.min(...ps.map((p) => p.x));
-    return { dx: -PAD - minX, dy: 0 };
+    return { dx: -d - minX, dy: 0 };
   }
   if (s.sx > 0) {
     const maxX = Math.max(...ps.map((p) => p.x + p.w));
-    return { dx: GRID_SIZE + PAD - maxX, dy: 0 };
+    return { dx: GRID_SIZE + d - maxX, dy: 0 };
   }
   return { dx: 0, dy: 0 };
 }
@@ -171,7 +174,7 @@ export function planSpawnEnter(
 
   return {
     items,
-    duration: Math.max(MS_MIN, maxTravel * MS_PER_CELL),
+    duration: Math.max(msMin(), maxTravel * msPerCell()),
   };
 }
 

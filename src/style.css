@@ -209,6 +209,69 @@ body.debug-game-labels .status {
   backdrop-filter: blur(6px);
 }
 
+#win-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 18px;
+  background: rgba(105, 174, 228, 0.28);
+  backdrop-filter: blur(8px);
+}
+
+#win-layer[hidden] {
+  display: none;
+}
+
+.win-card {
+  width: 100%;
+  max-width: 300px;
+  padding: 22px 18px 18px;
+  border-radius: 20px;
+  background: rgba(245, 248, 252, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 16px 32px rgba(55, 98, 132, 0.22);
+  text-align: center;
+}
+
+.win-kicker {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.win-title {
+  margin: 8px 0 4px;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.win-sub {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.win-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.win-primary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-ink);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
 .panel-title {
   margin: 0 0 10px;
   font-size: 13px;
@@ -432,6 +495,64 @@ body.debug-game-labels #board-root .piece-axis {
 }
 
 /* Desktop device switcher (outside design stage — allowed exception) */
+#tweak-panel {
+  position: absolute;
+  right: 0;
+  top: 52px;
+  z-index: 20;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+#tweak-panel .tweak-toggle,
+#tweak-panel #tweak-reset {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--ink);
+  font-size: 12px;
+  min-height: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+#tweak-panel .tweak-body {
+  width: 176px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(245, 248, 252, 0.92);
+  box-shadow: 0 8px 20px rgba(55, 98, 132, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+#tweak-panel .tweak-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+#tweak-panel .tweak-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+#tweak-panel .tweak-row span {
+  float: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+
+#tweak-panel input[type='range'] {
+  width: 100%;
+  margin: 0;
+}
+
 #device-switcher {
   position: fixed;
   top: 12px;

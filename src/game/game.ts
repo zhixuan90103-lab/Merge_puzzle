@@ -1,4 +1,10 @@
-import { cloneBoard, getPiece, removePiece, upsertPiece } from './board';
+import {
+  cloneBoard,
+  getPiece,
+  removePiece,
+  settleBoardPieces,
+  upsertPiece,
+} from './board';
 import { dealAfterClear, dealDebugNear64, dealOpening } from './deal';
 import { isDeadlock, isForcedLoss, isPlayable, isSafeToContinue } from './deadlock';
 import { proposeDrop, type DropProposal } from './dropResolve';
@@ -11,7 +17,7 @@ import { unlockedColorsForWave, waveIntroMessage } from './progress';
 import type { BoardState, Orientation, Piece } from './types';
 import { GRID_SIZE } from './types';
 
-export type GameStatus = 'playing' | 'dead';
+export type GameStatus = 'playing' | 'dead' | 'won';
 
 export type GameModel = {
   board: BoardState;
@@ -181,26 +187,17 @@ export function createGame() {
     piecesBefore: number,
     mergeColor = 0,
     slideDir?: { dx: number; dy: number },
+    opts?: { alreadyFilled?: boolean },
   ) => {
     const keepLift = model.lifted;
     const pend = pendingDrop;
 
     if (createdValue === 64) {
       pendingDrop = null;
-      const wave = model.wave + 1;
-      const unlocked = unlockedColorsForWave(wave);
-      const next = dealAfterClear(unlocked, wave);
-      const intro = waveIntroMessage(wave);
-      const msg =
-        unlocked > model.unlockedColors
-          ? `满屏消除 · 解锁第 ${unlocked} 色 · ${intro}`
-          : `满屏消除 · ${intro}`;
       set({
-        board: next,
-        status: 'playing',
-        message: msg,
-        wave,
-        unlockedColors: unlocked,
+        board,
+        status: 'won',
+        message: `第 ${model.wave} 关完成`,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -213,40 +210,51 @@ export function createGame() {
       return;
     }
 
-    const fillSrc = keepLift ? reserveLiftHome(board, keepLift) : board;
-    const spawn = trySpawnAfterMerge(
-      fillSrc,
-      model.unlockedColors,
-      model.wave,
-      piecesBefore,
-      { color: mergeColor, value: createdValue },
-    );
-    if (getPiece(spawn.board, -1)) removePiece(spawn.board, -1);
-    const spawned = spawn.spawnedIds.filter((id) => id !== -1).length > 0;
-    const note = `合并 → ${createdValue} · ${spawn.label}`;
+    let liveBoard = board;
+    settleBoardPieces(liveBoard);
+    let spawnedIds = model.spawnFlashIds.filter((id) => id !== -1);
+    let spawned = spawnedIds.length > 0;
+    let note = `合并 → ${createdValue}`;
+    if (!opts?.alreadyFilled) {
+      const fillSrc = keepLift ? reserveLiftHome(board, keepLift) : board;
+      const spawn = trySpawnAfterMerge(
+        fillSrc,
+        model.unlockedColors,
+        model.wave,
+        piecesBefore,
+        { color: mergeColor, value: createdValue },
+      );
+      if (getPiece(spawn.board, -1)) removePiece(spawn.board, -1);
+      liveBoard = spawn.board;
+      spawnedIds = spawn.spawnedIds.filter((id) => id !== -1);
+      spawned = spawnedIds.length > 0;
+      note = `合并 → ${createdValue} · ${spawn.label}`;
+    } else {
+      note = model.message || note;
+    }
 
     const live = keepLift
       ? (() => {
-          const b = cloneBoard(spawn.board);
+          const b = cloneBoard(liveBoard);
           upsertPiece(b, { ...keepLift });
           return b;
         })()
-      : spawn.board;
+      : liveBoard;
     const forced = isForcedLoss(live);
     const dead = !isPlayable(live) || forced || isDeadlock(live);
     if (dead) {
       pendingDrop = null;
       set({
-        board: spawn.board,
+        board: liveBoard,
         status: 'dead',
         message: forced
           ? `${note} · 死局：唯一的合会把自己走死，点重开`
           : `${note} · 无法再合并，点重开`,
         lifted: null,
         lastSpawn: spawned,
-        spawnFlashIds: spawn.spawnedIds.filter((id) => id !== -1),
-        spawnFromDx: slideDir?.dx ?? 0,
-        spawnFromDy: slideDir?.dy ?? 1,
+        spawnFlashIds: spawnedIds,
+        spawnFromDx: slideDir?.dx ?? model.spawnFromDx,
+        spawnFromDy: slideDir?.dy ?? model.spawnFromDy,
         animating: false,
         visualPieces: null,
         busyIds: [],
@@ -255,16 +263,16 @@ export function createGame() {
     }
 
     set({
-      board: spawn.board,
+      board: liveBoard,
       status: 'playing',
-      message: isSafeToContinue(spawn.board)
+      message: isSafeToContinue(liveBoard)
         ? note
         : `${note} · 局面危险`,
       lifted: keepLift,
       lastSpawn: spawned,
-      spawnFlashIds: spawn.spawnedIds.filter((id) => id !== -1),
-      spawnFromDx: slideDir?.dx ?? 0,
-      spawnFromDy: slideDir?.dy ?? 1,
+      spawnFlashIds: spawnedIds,
+      spawnFromDx: slideDir?.dx ?? model.spawnFromDx,
+      spawnFromDy: slideDir?.dy ?? model.spawnFromDy,
       animating: false,
       visualPieces: null,
       busyIds: [],
@@ -272,7 +280,12 @@ export function createGame() {
 
     if (pend && keepLift) {
       pendingDrop = null;
-      commitLiftedDrop(pend.ghost, pend.designDx, pend.designDy, pend.frame);
+      commitLiftedDrop(
+        pend.ghost,
+        pend.designDx,
+        pend.designDy,
+        pend.frame,
+      );
     } else {
       pendingDrop = null;
     }
@@ -355,30 +368,60 @@ export function createGame() {
         forcedTarget: proposal.mergeTarget ?? undefined,
       });
       if (result.ok) {
-        set({
+        cancelAnim?.();
+        const dir = slideDirFromPlan(result.plan);
+        const piecesBefore = result.startBoard.pieces.length + 1;
+        let filledBoard = result.board;
+        let spawnIds: number[] = [];
+        let spawnNote = '推挤生长中…';
+        if (result.createdValue !== 64) {
+          const spawn = trySpawnAfterMerge(
+            result.board,
+            model.unlockedColors,
+            model.wave,
+            piecesBefore,
+            { color: A.color, value: result.createdValue },
+          );
+          filledBoard = spawn.board;
+          spawnIds = spawn.spawnedIds.filter((id) => id !== -1);
+          spawnNote = `合并 → ${result.createdValue} · ${spawn.label}`;
+        }
+        model = {
+          ...model,
           animating: true,
           lifted: null,
-          message: '推挤生长中…',
-          spawnFlashIds: [],
-          board: result.startBoard,
-          visualPieces: null,
+          message: spawnNote,
+          spawnFlashIds: spawnIds,
+          spawnFromDx: dir.dx,
+          spawnFromDy: dir.dy,
+          board: filledBoard,
+          lastSpawn: spawnIds.length > 0,
           busyIds: busyFromPlan(result.plan),
-        });
-        cancelAnim?.();
+        };
+        emit();
+        const extraIds = new Set(spawnIds);
         cancelAnim = playMergePlan(result.startBoard, result.plan, {
           onVisual: (pieces) => {
-            model = { ...model, visualPieces: pieces, animating: true };
+            const seen = new Set(pieces.map((p) => p.id));
+            const extras = filledBoard.pieces
+              .filter((p) => extraIds.has(p.id) && !seen.has(p.id))
+              .map((p) => ({ ...p, opacity: 1 }));
+            model = {
+              ...model,
+              visualPieces: extras.length ? [...pieces, ...extras] : pieces,
+              animating: true,
+            };
             emit();
           },
-          onDone: (finalBoard) => {
+          onDone: () => {
             cancelAnim = null;
-            const piecesBefore = result.startBoard.pieces.length + 1;
             afterMerge(
-              finalBoard,
+              filledBoard,
               result.createdValue,
               piecesBefore,
               A.color,
-              slideDirFromPlan(result.plan),
+              dir,
+              { alreadyFilled: true },
             );
           },
         }).cancel;
@@ -428,12 +471,39 @@ export function createGame() {
       cancelAnim?.();
       cancelAnim = null;
       pendingDrop = null;
+      const wave = Math.max(1, model.wave);
+      const unlocked = unlockedColorsForWave(wave);
       set({
-        board: dealOpening(2, 1),
+        board: dealOpening(unlocked, wave),
         status: 'playing',
-        message: `重新开局 · ${waveIntroMessage(1)}`,
-        wave: 1,
-        unlockedColors: 2,
+        message: `重开本关 · ${waveIntroMessage(wave)}`,
+        wave,
+        unlockedColors: unlocked,
+        lifted: null,
+        lastSpawn: false,
+        spawnFlashIds: [],
+        animating: false,
+        visualPieces: null,
+        busyIds: [],
+      });
+    },
+    nextLevel: () => {
+      cancelAnim?.();
+      cancelAnim = null;
+      pendingDrop = null;
+      const wave = model.wave + 1;
+      const unlocked = unlockedColorsForWave(wave);
+      const intro = waveIntroMessage(wave);
+      const msg =
+        unlocked > model.unlockedColors
+          ? `满屏消除 · 解锁第 ${unlocked} 色 · ${intro}`
+          : `下一关 · ${intro}`;
+      set({
+        board: dealAfterClear(unlocked, wave),
+        status: 'playing',
+        message: msg,
+        wave,
+        unlockedColors: unlocked,
         lifted: null,
         lastSpawn: false,
         spawnFlashIds: [],
@@ -480,7 +550,7 @@ export function createGame() {
       });
     },
     beginLift: (pieceId: number) => {
-      if (model.status === 'dead') return false;
+      if (model.status === 'dead' || model.status === 'won') return false;
       if (model.lifted) return false;
       if (model.busyIds.includes(pieceId)) return false;
       const p = getPiece(model.board, pieceId);

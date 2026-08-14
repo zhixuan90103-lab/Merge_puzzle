@@ -2,6 +2,7 @@ import type { StageLayout } from '../adapt/design';
 import { haptics } from '../utils/haptics';
 import {
   initialDragPhase,
+  beginLiftPhase,
   resetDragPhase as resetPhaseState,
   stepDragPhase,
   type DragPhaseState,
@@ -22,7 +23,8 @@ import type { Piece } from './types';
 import { GRID_SIZE } from './types';
 import { createPushPreview } from './previewPush';
 import { planSpawnEnter, spawnEnterKey } from './spawnEnter';
-import { CELL_MS, type VisualPiece } from './timeline';
+import { cellMs, type VisualPiece } from './timeline';
+import { tweaks, TWEAK_DEFAULTS } from './tweaks';
 
 export type BoardLayout = {
   originX: number;
@@ -31,6 +33,8 @@ export type BoardLayout = {
   size: number;
 };
 
+/** Design 390×844: board top. Larger = lower. Live value in tweaks.boardOriginY. */
+export const BOARD_ORIGIN_Y = TWEAK_DEFAULTS.boardOriginY;
 const CELL_INSET = 1.5;
 const BOARD_PADDING = 10;
 const PIECE_RADIUS = 15;
@@ -42,7 +46,7 @@ export function computeBoardLayout(): BoardLayout {
   const size = 360;
   const cell = size / GRID_SIZE;
   const originX = (390 - size) / 2;
-  const originY = 120;
+  const originY = tweaks.boardOriginY;
   return { originX, originY, cell, size };
 }
 
@@ -442,6 +446,22 @@ export function mountGameView(
   `;
   uiRoot.appendChild(header);
   uiRoot.appendChild(panel);
+
+  const winLayer = document.createElement('div');
+  winLayer.id = 'win-layer';
+  winLayer.hidden = true;
+  winLayer.innerHTML = `
+    <div class="win-card">
+      <p class="win-kicker">关卡完成</p>
+      <h2 class="win-title" id="win-title">第 1 关</h2>
+      <p class="win-sub" id="win-sub">单色满屏 64</p>
+      <div class="win-actions">
+        <button type="button" id="btn-win-next" class="win-primary">下一关</button>
+        <button type="button" id="btn-win-retry">重开本关</button>
+      </div>
+    </div>
+  `;
+  uiRoot.appendChild(winLayer);
   if (!debugUi) {
     panel.querySelector('#btn-debug')?.remove();
   }
@@ -767,18 +787,24 @@ export function mountGameView(
     // Keep left/top (not transform) during merge — switching to
     // translate3d for one clip makes the whole board twitch.
     const motionOnly = !!(g.visualPieces && g.animating);
-    if (!g.animating && g.spawnFlashIds.length) {
+    if (g.spawnFlashIds.length) {
       const peek = `${g.spawnFlashIds.join(',')}|${g.spawnFromDx},${g.spawnFromDy}`;
       if (peek !== lastSpawnAnimKey) {
         for (const id of g.spawnFlashIds) spawning.add(id);
       }
     }
     if (g.visualPieces) {
-      syncPieces(g.visualPieces, g.spawnFlashIds, motionOnly);
+      const seen = new Set(g.visualPieces.map((p) => p.id));
+      const extras = g.board.pieces.filter((p) => !seen.has(p.id));
+      syncPieces(
+        extras.length ? [...g.visualPieces, ...extras] : g.visualPieces,
+        g.spawnFlashIds,
+        motionOnly,
+      );
     } else {
       syncPieces(g.board.pieces, g.spawnFlashIds, false);
     }
-    if (!g.animating) playSpawnSlide(g);
+    playSpawnSlide(g);
     if (!g.lifted && dragEl && !dragging) {
       dragEl.style.display = 'none';
     }
@@ -799,8 +825,27 @@ export function mountGameView(
 
 
     // Avoid layout thrash: status text only when changed
+    const won = g.status === 'won';
+    winLayer.hidden = !won;
+    if (won) {
+      const title = winLayer.querySelector('#win-title');
+      const sub = winLayer.querySelector('#win-sub');
+      if (title) title.textContent = `第 ${g.wave} 关`;
+      if (sub) {
+        sub.textContent =
+          g.unlockedColors < 5
+            ? '单色满屏 64'
+            : '单色满屏 64';
+      }
+    }
     const phase =
-      g.status === 'dead' ? '失败' : g.animating ? '动画中' : '进行中';
+      g.status === 'dead'
+        ? '失败'
+        : g.status === 'won'
+          ? '胜利'
+          : g.animating
+            ? '动画中'
+            : '进行中';
     const statusKey = `${g.wave}|${g.unlockedColors}|${phase}|${g.message}`;
     if (statusKey !== lastStatusKey) {
       lastStatusKey = statusKey;
@@ -826,7 +871,13 @@ export function mountGameView(
     api.restart();
   });
   panel.querySelector('#btn-next-wave')?.addEventListener('click', () => {
-    api.debugNextWave();
+    api.nextLevel();
+  });
+  winLayer.querySelector('#btn-win-next')?.addEventListener('click', () => {
+    api.nextLevel();
+  });
+  winLayer.querySelector('#btn-win-retry')?.addEventListener('click', () => {
+    api.restart();
   });
   panel.querySelector('#btn-debug')?.addEventListener('click', () => {
     api.loadDebug();
@@ -912,6 +963,8 @@ export function mountGameView(
       const fill = pieceFillColor(pieceStart.color, pieceStart.value * 2);
       const depth = pieceDepthColor(pieceStart.color, pieceStart.value * 2);
       mergeShapeEl.style.display = 'block';
+      mergeShapeEl.style.opacity = '0.5';
+      mergeShapeEl.style.transition = '';
       mergeShapeEl.style.setProperty('--piece-fill', fill);
       mergeShapeEl.style.setProperty('--piece-depth', depth);
       mergeShapeEl.style.setProperty('--piece-shadow', pieceShadowColor(pieceStart.color));
@@ -936,7 +989,7 @@ export function mountGameView(
           Math.abs(T.y + T.h - (from.y + from.h)),
         );
         lastGrowCells = growCells;
-        const growMs = growCells * CELL_MS;
+        const growMs = growCells * cellMs();
         const t0 = performance.now();
         const tick = (now: number) => {
           const u = Math.min(1, (now - t0) / growMs);
@@ -1026,7 +1079,8 @@ export function mountGameView(
       nearest,
     });
     phaseState = stepped.state;
-    if (stepped.haptic) void haptics.selection();
+    if (stepped.haptic === 'attach') void haptics.impact('light', 12);
+    else if (stepped.haptic === 'detach') void haptics.selection(4);
 
     let enterDx = 0;
     let enterDy = 0;
@@ -1109,10 +1163,12 @@ export function mountGameView(
     });
 
     if (phase === 'locked' && phaseState.lockedTargetId != null) {
+      const ways = lastProposal.mergeUniqueWays ?? 0;
       if (
         lastProposal.kind === 'merge' &&
         lastProposal.mergeTarget &&
-        lastProposal.targetId === phaseState.lockedTargetId
+        lastProposal.targetId === phaseState.lockedTargetId &&
+        ways === 1
       ) {
         if (!stickyMerge || releaseSticky) {
           stickyMerge = {
@@ -1124,14 +1180,16 @@ export function mountGameView(
           };
           pendingSwitch = null;
         }
+      } else if (ways > 1) {
+        stickyMerge = null;
       }
-      if (stickyMerge) {
+      if (stickyMerge && ways === 1) {
         lastProposal = {
           ...lastProposal,
           kind: 'merge',
           targetId: stickyMerge.targetId,
           mergeTarget: stickyMerge.T,
-          mergeUniqueWays: lastProposal.mergeUniqueWays ?? 1,
+          mergeUniqueWays: 1,
           bilateral: stickyMerge.bilateral,
           growDirX: stickyMerge.dirX,
           growDirY: stickyMerge.dirY,
@@ -1208,7 +1266,7 @@ export function mountGameView(
 
   const onPointerDown = (e: PointerEvent) => {
     const g = api.get();
-    if (g.status === 'dead' || g.lifted) return;
+    if (g.status === 'dead' || g.status === 'won' || g.lifted) return;
 
     const d = toDesign(e.clientX, e.clientY);
     if (!d) return;
@@ -1251,7 +1309,19 @@ export function mountGameView(
     };
     lastDesign = { x: d.x, y: d.y };
     liftDesign = { x: d.x, y: d.y };
-    resetDragPhase();
+    {
+      const lifted = api.get().lifted ?? hit;
+      const aim = aimBoardLocal(d.x, d.y);
+      const F = fingerRectFromAim(
+        aim.x / cell,
+        aim.y / cell,
+        pieceStart.w,
+        pieceStart.h,
+      );
+      phaseState = beginLiftPhase(d.x, d.y, api.get().board, lifted, F);
+      stickyMerge = null;
+      pendingSwitch = null;
+    }
 
     if (!dragEl) {
       dragEl = document.createElement('div');
@@ -1374,13 +1444,14 @@ export function mountGameView(
       api.dropAt(cellPos, designDx, designDy, frozenProp);
       const stillHeld = !!api.get().lifted;
       if (stillHeld && dragEl) {
-        // Queued behind in-flight grow — keep parked clone until commit.
         dragEl.style.display = 'flex';
       } else if (dragEl) {
         dragEl.style.display = 'none';
       }
       paintProposal(null, pieceStart);
       mergeShapeEl.style.display = 'none';
+      mergeShapeEl.style.opacity = '0.5';
+      mergeShapeEl.style.transition = '';
       if (push.pendingCommit && !api.get().animating) {
         push.setPendingCommit(false);
         push.back();

@@ -14,6 +14,12 @@ export const SNAP_EXIT_DIST = 1.65;
 /** Fractional overlap (continuous) that counts as touching. */
 export const LOCK_OVERLAP_ENTER = 0.22;
 export const LOCK_OVERLAP_EXIT = 0.08;
+/** Steal lock when another mergeable's overlap beats current B by this much. */
+export const LOCK_STEAL_OVERLAP = 0.12;
+/** Finger must travel this far (cells) after lift before lock can arm. */
+export const LOCK_ARM_DIST = 0.4;
+/** Extra overlap needed to lock a piece you were already touching at lift. */
+export const LOCK_SEED_EXTRA = 0.2;
 export const AIM_DEADZONE = 0.25;
 export const AIM_COMMIT = 0.4;
 /** Logic ghost soft-pull toward B when locked (0–1). Visual pull is off. */

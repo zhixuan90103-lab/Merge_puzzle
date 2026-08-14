@@ -7,6 +7,7 @@ import {
   cellKey,
   clipPieceToBoard,
   cloneBoard,
+  settleBoardPieces,
   footprintsContact,
   getPiece,
   inBounds,
@@ -1011,6 +1012,8 @@ function tryGrowInPlace(
       upsertPiece(board, clipped);
     }
   }
+
+  settleBoardPieces(board);
 
   const final = getPiece(board, bId);
   if (!final || final.w !== to.w || final.h !== to.h || final.x !== to.x || final.y !== to.y) {

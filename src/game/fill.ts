@@ -7,7 +7,14 @@
  * - Partner orphans using **same w×h** as the orphan
  * - Avoid “技术上可玩、体验上死盘”（如 8横+8竖 不能合）
  */
-import { allocId, boardArea, canPlaceRect, cloneBoard, upsertPiece } from './board';
+import {
+  allocId,
+  boardArea,
+  canPlaceRect,
+  cloneBoard,
+  settleBoardPieces,
+  upsertPiece,
+} from './board';
 import {
   hasSustainablePlay,
   isForcedLoss,
@@ -461,9 +468,11 @@ function labelFor(board: BoardState, ids: number[]): string {
 }
 
 export function fillToFull(board: BoardState, hint: FillHint): FillResult {
-  const area0 = boardArea(board);
-  if (area0 > FULL) return { board, spawnedIds: [], label: '占格溢出' };
-  if (area0 === FULL) return { board, spawnedIds: [], label: '满盘无补' };
+  const start = cloneBoard(board);
+  settleBoardPieces(start);
+  const area0 = boardArea(start);
+  if (area0 > FULL) return { board: start, spawnedIds: [], label: '占格溢出' };
+  if (area0 === FULL) return { board: start, spawnedIds: [], label: '满盘无补' };
 
   const h: FillHint = {
     ...hint,
@@ -477,7 +486,7 @@ export function fillToFull(board: BoardState, hint: FillHint): FillResult {
     null;
 
   for (let t = 0; t < 14; t++) {
-    const r = attemptFill(board, h);
+    const r = attemptFill(start, h);
     if (boardArea(r.board) !== FULL) continue;
     const score = scoreFilled(r.board, r.ids, h);
     if (!best || score > best.score) best = { ...r, score };
@@ -510,7 +519,7 @@ export function fillToFull(board: BoardState, hint: FillHint): FillResult {
   }
 
   // Last resort: square-ish pairs of 2, then 1s
-  let cur = cloneBoard(board);
+  let cur = cloneBoard(start);
   const ids: number[] = [];
   while (boardArea(cur) < FULL) {
     const rem = FULL - boardArea(cur);

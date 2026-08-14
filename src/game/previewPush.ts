@@ -2,7 +2,8 @@
  * Push-preview director. Design: docs/DESIGN_PREVIEW.md
  * toward / back / pin-on-board / fly-out-off-board.
  */
-import { CELL_MS } from './timeline';
+import { clipRectToBoard } from './board';
+import { cellMs } from './timeline';
 import type { GameModel } from './game';
 import type { PushPreviewItem } from './dropResolve';
 
@@ -113,7 +114,7 @@ export function createPushPreview(host: PushPreviewHost) {
   let fromU = 0;
   let toU = 0;
   let t0 = 0;
-  let dur = CELL_MS;
+  let dur = cellMs();
   let raf = 0;
   let frozen = false;
   let fly = false;
@@ -201,6 +202,7 @@ export function createPushPreview(host: PushPreviewHost) {
       return items.length;
     },
     holdIds(): Set<number> | null {
+      if (!getModel().animating && !fly) return null;
       if (!fly && !pendingCommit && pinned.size === 0) return null;
       holdCache.clear();
       for (const it of items) holdCache.add(it.id);
@@ -219,7 +221,7 @@ export function createPushPreview(host: PushPreviewHost) {
       key = nextKey;
       fromU = same ? u : 0;
       toU = 1;
-      dur = duration ?? CELL_MS;
+      dur = duration ?? cellMs();
       t0 = startAt ?? performance.now();
       if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(tick);
@@ -248,8 +250,17 @@ export function createPushPreview(host: PushPreviewHost) {
         else stay.push(item);
       }
       for (const item of stay) {
-        pinned.set(item.id, item.dest);
-        plant(item, item.dest, 1);
+        const clipped = clipRectToBoard(
+          item.dest.x,
+          item.dest.y,
+          item.dest.w,
+          item.dest.h,
+        );
+        const dest = clipped
+          ? { x: clipped.x, y: clipped.y, w: clipped.w, h: clipped.h }
+          : item.dest;
+        pinned.set(item.id, dest);
+        plant(item, dest, 1);
       }
       if (leave.length === 0) {
         items = [];
@@ -274,12 +285,20 @@ export function createPushPreview(host: PushPreviewHost) {
       }
       fromU = 0;
       toU = 1;
-      dur = growCells * CELL_MS;
+      dur = growCells * cellMs();
       t0 = performance.now();
       if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(tick);
     },
     onRender(g: GameModel, growCells = 1) {
+      if (!g.animating && !fly) {
+        pinned.clear();
+        pendingCommit = false;
+        items = [];
+        key = '';
+        u = 0;
+        return;
+      }
       if (g.animating && items.length && !fly) {
         frozen = true;
         this.flyOut(Math.max(1, growCells));

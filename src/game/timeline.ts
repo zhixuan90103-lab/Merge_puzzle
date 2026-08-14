@@ -1,5 +1,6 @@
 import type { BoardState, Piece } from './types';
 import type { AtomicStep, MergePlan, Rect } from './plan';
+import { tweaks } from './tweaks';
 import { easeInOutCubic, lerpRect } from './visual';
 import {
   clipPieceToBoard,
@@ -30,7 +31,9 @@ export type TimelineCallbacks = {
 };
 
 /** Duration per logical cell (ms). Linear segments → no stop-start between cells. */
-export const CELL_MS = 95;
+export const cellMs = () => tweaks.cellMs;
+/** Live grow/push cell duration (ms). Prefer cellMs(). */
+export const CELL_MS = 88;
 /** Soft ease across the whole merge clip (not per cell). */
 const USE_GLOBAL_EASE = true;
 
@@ -72,7 +75,7 @@ function pieceToVisual(
     typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
   return {
     id: p.id,
-    value: p.value,
+    value: Math.max(1, Math.round(p.value)),
     color,
     x: p.x,
     y: p.y,
@@ -330,11 +333,11 @@ export function playMergePlan(
   }
 
   const { tracks, finalBoard, stepCount } = buildTracks(startBoard, plan);
-  const duration = Math.max(CELL_MS, stepCount * CELL_MS);
   const t0 = performance.now();
 
   // Static ids for pieces that never move (sampled once positions)
   const trackMap = new Map(tracks.map((t) => [t.id, t]));
+  const duration = Math.max(cellMs(), stepCount * cellMs());
 
   const run = (now: number) => {
     if (cancelled) return;
@@ -344,9 +347,7 @@ export function playMergePlan(
     const visuals: VisualPiece[] = [];
     for (const track of tracks) {
       const r = sampleTrack(track, u, stepCount);
-      // Skip fully off-board at end
       if (u >= 1 && isFullyOff(r) && track.id !== plan.anchorId) continue;
-      // During motion, hide fully off; keep clipped-on-board bodies
       if (isFullyOff(r) && track.id !== plan.anchorId && r.opacity < 0.2) continue;
       visuals.push(
         pieceToVisual(
