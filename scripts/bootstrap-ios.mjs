@@ -60,6 +60,26 @@ function copyPluginSources() {
   }
 }
 
+function patchSceneDelegate() {
+  const scenePath = path.join(iosAppDir, 'SceneDelegate.swift');
+  if (!fs.existsSync(scenePath)) return;
+  let src = fs.readFileSync(scenePath, 'utf8');
+  if (src.includes('BridgeViewController()')) {
+    console.log('SceneDelegate already uses BridgeViewController');
+    return;
+  }
+  if (src.includes('CAPBridgeViewController()')) {
+    src = src.replace(
+      'window?.rootViewController = CAPBridgeViewController()',
+      'window?.rootViewController = BridgeViewController()',
+    );
+    fs.writeFileSync(scenePath, src);
+    console.log('patched SceneDelegate → BridgeViewController');
+    return;
+  }
+  console.warn('SceneDelegate has no CAPBridgeViewController() to patch');
+}
+
 function patchStoryboard() {
   if (!fs.existsSync(storyboardPath)) {
     console.warn('Main.storyboard not found, skip storyboard patch');
@@ -191,6 +211,7 @@ function main() {
   }
   ensureIosProject();
   copyPluginSources();
+  patchSceneDelegate();
   patchStoryboard();
   patchInfoPlistPortrait();
   patchPbxproj();

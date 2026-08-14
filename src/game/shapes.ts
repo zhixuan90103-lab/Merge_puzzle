@@ -2,8 +2,9 @@ import { GRID_SIZE, type Orientation, type Piece } from './types';
 
 /**
  * Axis of a piece on the board.
- * - s: square (1×1, 2×2, …) — can merge with h or v of same value
- * - h / v: strip — only same axis may merge (e.g. 横2 只能合 横2)
+ * - s: square (1×1, 2×2, 4×4…)
+ * - h / v: strip
+ * Merge only same axis: 横合横、竖合竖、方合方。
  */
 export type ShapeAxis = 'h' | 'v' | 's';
 
@@ -12,13 +13,10 @@ export function shapeAxis(p: Pick<Piece, 'w' | 'h'>): ShapeAxis {
   return p.w > p.h ? 'h' : 'v';
 }
 
-/** Same value only; strips must share axis; square is free. (No color check.) */
+/** Same value + same axis. Square is not a wildcard. */
 export function canMergeByShape(a: Pick<Piece, 'w' | 'h' | 'value'>, b: Pick<Piece, 'w' | 'h' | 'value'>): boolean {
   if (a.value !== b.value) return false;
-  const oa = shapeAxis(a);
-  const ob = shapeAxis(b);
-  if (oa === 's' || ob === 's') return true;
-  return oa === ob;
+  return shapeAxis(a) === shapeAxis(b);
 }
 
 /** Full merge gate: same color + same value + shape/axis. */

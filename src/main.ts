@@ -20,6 +20,7 @@ import {
 import { applyNativeClass, applySafeAreaCssVars, readSafeAreaInsets } from './adapt/safeArea';
 import { createGame } from './game/game';
 import { mountGameView } from './game/view';
+import { haptics } from './utils/haptics';
 
 const shell = document.getElementById('shell')!;
 const viewportEl = document.getElementById('viewport')!;
@@ -65,6 +66,7 @@ async function boot(): Promise<void> {
 
     const game = createGame();
     const view = mountGameView(stage, uiRoot, game, () => latest);
+    if (native) void haptics.prepare();
 
     window.addEventListener(
       'pagehide',
@@ -106,6 +108,7 @@ async function boot(): Promise<void> {
 
     const game = createGame();
     mountGameView(stage, uiRoot, game, () => latest);
+    if (native) void haptics.prepare();
   }
 }
 

@@ -10,7 +10,9 @@ npm run ios:bootstrap
 
 ## 注册
 
-`Main.storyboard` → `BridgeViewController` → `capacitorDidLoad` → `AdvancedHapticsPlugin`
+`SceneDelegate` 必须 `rootViewController = BridgeViewController()`  
+（Capacitor 8 不再走 storyboard 根 VC）。  
+`BridgeViewController.capacitorDidLoad` → `registerPluginInstance(AdvancedHapticsPlugin())`
 
 ## JS
 

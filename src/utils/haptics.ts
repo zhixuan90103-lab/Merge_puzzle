@@ -44,7 +44,7 @@ type AdvancedHapticsPlugin = {
   }): Promise<void>;
   stopContinuousHaptic(): Promise<void>;
   setKeepAwake(opts: { enabled: boolean }): Promise<{ enabled: boolean }>;
-  prepare?(): Promise<{ supported?: boolean; fallback?: boolean }>;
+  prepare(): Promise<{ supported?: boolean; fallback?: boolean }>;
 };
 
 const AdvancedHaptics = registerPlugin<AdvancedHapticsPlugin>('AdvancedHaptics');
@@ -55,8 +55,9 @@ let lastError = '';
 const isNativeIos = () =>
   Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
 
-const pluginReady = () =>
-  isNativeIos() && Capacitor.isPluginAvailable('AdvancedHaptics');
+/** Native iOS always attempts the plugin. `isPluginAvailable` is not required:
+ *  local in-app plugins can be registered after Capacitor's first availability scan. */
+const pluginReady = () => isNativeIos();
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));

@@ -7,6 +7,7 @@ public class AdvancedHapticsPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AdvancedHapticsPlugin"
     public let jsName = "AdvancedHaptics"
     public let pluginMethods: [CAPPluginMethod] = [
+        CAPPluginMethod(name: "prepare", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "impact", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "notification", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "selection", returnType: CAPPluginReturnPromise),
@@ -20,9 +21,20 @@ public class AdvancedHapticsPlugin: CAPPlugin, CAPBridgedPlugin {
     private var engine: CHHapticEngine?
     private var continuousPlayer: CHHapticAdvancedPatternPlayer?
     private var isEngineRunning = false
+    // Keep generators alive — deallocating immediately after impactOccurred()
+    // often swallows the haptic.
+    private let impactLight = UIImpactFeedbackGenerator(style: .light)
+    private let impactMedium = UIImpactFeedbackGenerator(style: .medium)
+    private let impactHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let impactSoft = UIImpactFeedbackGenerator(style: .soft)
+    private let impactRigid = UIImpactFeedbackGenerator(style: .rigid)
+    private let selectionGen = UISelectionFeedbackGenerator()
+    private let notificationGen = UINotificationFeedbackGenerator()
 
     override public func load() {
         initEngine()
+        impactLight.prepare()
+        selectionGen.prepare()
     }
 
     // MARK: - CHHapticEngine
@@ -50,22 +62,37 @@ public class AdvancedHapticsPlugin: CAPPlugin, CAPBridgedPlugin {
         _ = message
     }
 
+    // MARK: - prepare (warm engine + generators, no playback)
+
+    @objc func prepare(_ call: CAPPluginCall) {
+        startEngineIfNeededQuietly()
+        DispatchQueue.main.async {
+            self.impactLight.prepare()
+            self.impactMedium.prepare()
+            self.impactSoft.prepare()
+            self.selectionGen.prepare()
+            let supported = CHHapticEngine.capabilitiesForHardware().supportsHaptics
+            call.resolve(["supported": supported, "fallback": !supported])
+        }
+    }
+
     // MARK: - impact
 
     @objc func impact(_ call: CAPPluginCall) {
         let style = call.getString("style") ?? "medium"
-        let feedbackStyle: UIImpactFeedbackGenerator.FeedbackStyle
+        let generator: UIImpactFeedbackGenerator
         switch style {
-        case "light":  feedbackStyle = .light
-        case "heavy":  feedbackStyle = .heavy
-        case "soft":   feedbackStyle = .soft
-        case "rigid":  feedbackStyle = .rigid
-        default:       feedbackStyle = .medium
+        case "light":  generator = impactLight
+        case "heavy":  generator = impactHeavy
+        case "soft":   generator = impactSoft
+        case "rigid":  generator = impactRigid
+        default:       generator = impactMedium
         }
-        let generator = UIImpactFeedbackGenerator(style: feedbackStyle)
-        generator.prepare()
-        generator.impactOccurred()
-        call.resolve()
+        DispatchQueue.main.async {
+            generator.prepare()
+            generator.impactOccurred()
+            call.resolve()
+        }
     }
 
     // MARK: - notification
@@ -78,19 +105,21 @@ public class AdvancedHapticsPlugin: CAPPlugin, CAPBridgedPlugin {
         case "error":   feedbackType = .error
         default:        feedbackType = .success
         }
-        let generator = UINotificationFeedbackGenerator()
-        generator.prepare()
-        generator.notificationOccurred(feedbackType)
-        call.resolve()
+        DispatchQueue.main.async {
+            self.notificationGen.prepare()
+            self.notificationGen.notificationOccurred(feedbackType)
+            call.resolve()
+        }
     }
 
     // MARK: - selection
 
     @objc func selection(_ call: CAPPluginCall) {
-        let generator = UISelectionFeedbackGenerator()
-        generator.prepare()
-        generator.selectionChanged()
-        call.resolve()
+        DispatchQueue.main.async {
+            self.selectionGen.prepare()
+            self.selectionGen.selectionChanged()
+            call.resolve()
+        }
     }
 
     // MARK: - playPattern

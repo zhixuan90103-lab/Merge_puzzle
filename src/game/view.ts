@@ -1079,8 +1079,8 @@ export function mountGameView(
       nearest,
     });
     phaseState = stepped.state;
-    if (stepped.haptic === 'attach') void haptics.impact('light', 12);
-    else if (stepped.haptic === 'detach') void haptics.selection(4);
+    if (stepped.haptic === 'attach') void haptics.stackImpact(0.68, 0.55, 16);
+    else if (stepped.haptic === 'detach') void haptics.stackImpact(0.38, 0.30, 8);
 
     let enterDx = 0;
     let enterDy = 0;

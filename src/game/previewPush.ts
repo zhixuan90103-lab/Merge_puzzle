@@ -2,7 +2,7 @@
  * Push-preview director. Design: docs/DESIGN_PREVIEW.md
  * toward / back / pin-on-board / fly-out-off-board.
  */
-import { clipRectToBoard } from './board';
+import { clipRectToBoard, countOnBoardCells } from './board';
 import { cellMs } from './timeline';
 import type { GameModel } from './game';
 import type { PushPreviewItem } from './dropResolve';
@@ -132,6 +132,9 @@ export function createPushPreview(host: PushPreviewHost) {
     el.style.height = `${at.h * cell - inset * 2}px`;
     el.style.transform = '';
     el.style.opacity = String(opacity);
+    const remain = countOnBoardCells(at.x, at.y, at.w, at.h);
+    const num = el.querySelector('.piece-value');
+    if (num && remain > 0) num.textContent = String(remain);
   };
 
   const apply = (uu: number, solid: boolean) => {

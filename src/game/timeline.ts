@@ -5,6 +5,7 @@ import { easeInOutCubic, lerpRect } from './visual';
 import {
   clipPieceToBoard,
   cloneBoard,
+  countOnBoardCells,
   getPiece,
   upsertPiece,
   removePiece,
@@ -73,9 +74,15 @@ function pieceToVisual(
   const off = isFullyOff(p);
   const color =
     typeof p.color === 'number' && Number.isFinite(p.color) ? p.color : 0;
+  const remain = countOnBoardCells(p.x, p.y, p.w, p.h);
+  const value = flags?.growing
+    ? Math.max(1, Math.round(p.value))
+    : remain > 0
+      ? remain
+      : Math.max(1, Math.round(p.value));
   return {
     id: p.id,
-    value: Math.max(1, Math.round(p.value)),
+    value,
     color,
     x: p.x,
     y: p.y,
